@@ -1,5 +1,7 @@
 "use client";
 
+import { sha256Hex } from "./sha256";
+
 /**
  * Client side of the emergency loop: the user's profile (name, trusted
  * contacts, Safety PIN verifier) lives in localStorage; live sessions live in
@@ -75,11 +77,17 @@ export const loadAlert = () => readLS<ActiveAlert>(ALERT_KEY);
 export const saveAlert = (a: ActiveAlert | null) => writeLS(ALERT_KEY, a);
 
 export async function pinVerifier(pin: string): Promise<string> {
-  const data = new TextEncoder().encode(`safestride-pin:${pin}`);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const input = `safestride-pin:${pin}`;
+  // crypto.subtle only exists in a secure context. A phone opening the app at
+  // http://10.x.x.x:3000 has none, and hashing the PIN must not be the thing
+  // that breaks saving contacts.
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return sha256Hex(input);
 }
 
 /** UK-friendly: "07700 900123" -> "+447700900123". Returns null if invalid. */
