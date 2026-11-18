@@ -18,6 +18,11 @@ export interface Env {
   TWILIO_AUTH_TOKEN?: string;
   /** E.164 SMS sender, e.g. +447700900123 (a Twilio number that can send SMS) */
   TWILIO_SMS_FROM?: string;
+  /**
+   * Textbelt key. "textbelt" is the public key: one free text per day, no
+   * signup — enough to demo a real SMS arriving on a phone.
+   */
+  TEXTBELT_KEY?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
   PUBLIC_ORIGIN?: string;
 }
@@ -186,12 +191,36 @@ export class TrackSession extends DurableObject<Env> {
   }
 }
 
-// ---------- SMS dispatch (Twilio) ----------
+// ---------- SMS dispatch ----------
 
 type Contact = { name: string; phone: string };
 type DispatchResult = { name: string; ok: boolean; error?: string };
 
+const twilioReady = (env: Env) =>
+  Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
+
+/** The public Textbelt key is rate-limited to one text a day. */
+const onFreeTextbelt = (env: Env) => !twilioReady(env) && env.TEXTBELT_KEY === "textbelt";
+
 async function sendSms(env: Env, to: string, body: string): Promise<void> {
+  return twilioReady(env) ? sendViaTwilio(env, to, body) : sendViaTextbelt(env, to, body);
+}
+
+async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void> {
+  const res = await fetch("https://textbelt.com/text", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ phone: to, message: body, key: env.TEXTBELT_KEY! }),
+  });
+  const out = (await res.json().catch(() => null)) as {
+    success?: boolean;
+    error?: string;
+    quotaRemaining?: number;
+  } | null;
+  if (!res.ok || !out?.success) throw new Error(out?.error ?? `HTTP ${res.status}`);
+}
+
+async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
   const form = new URLSearchParams({
     From: env.TWILIO_SMS_FROM!,
@@ -297,13 +326,20 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     return json({ error: "no_valid_contacts" }, 400);
   }
 
-  const configured = Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
+  // The free Textbelt key refuses messages containing URLs, so that path gets
+  // a link-free alert (coordinates only) instead of losing the whole text.
+  const smsBody = onFreeTextbelt(env)
+    ? `SafeStride ALERT ${time}: ${ownerName} needs help at ` +
+      `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} walking to ${targetName}.`
+    : message;
+
+  const configured = twilioReady(env) || Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
       contacts.map(async (c) => {
         try {
-          await sendSms(env, c.phone, message);
+          await sendSms(env, c.phone, smsBody);
           return { name: c.name, ok: true };
         } catch (e) {
           return { name: c.name, ok: false, error: (e as Error).message };
@@ -320,6 +356,7 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     expiresAt: record.expiresAt,
     dispatch: {
       mode: configured ? "sms" : "manual",
+      provider: twilioReady(env) ? "twilio" : env.TEXTBELT_KEY ? "textbelt" : null,
       results,
       configured,
     },

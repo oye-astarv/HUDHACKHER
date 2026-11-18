@@ -16,6 +16,7 @@ import {
   pushPoint,
   resolveAlert,
   saveAlert,
+  openSmsApp,
   saveProfile,
   shareManually,
   triggerEmergency,
@@ -215,10 +216,15 @@ export default function Page() {
         saveAlert(stored);
         setAlert(stored);
         setDispatchNote(note);
-        // Never jump to the messaging app on its own: that would take the SOS
-        // screen away at the worst possible moment. Offer it as a button.
         setShareNeeded(created.dispatch.mode !== "sms" || failed > 0);
         await keepAwake();
+
+        // If the server could not text anyone (no account, or every send
+        // failed), hand the alert straight to the phone's messaging app — the
+        // only tap left is the phone's own Send button, never ours.
+        if (created.dispatch.mode !== "sms" || failed > 0) {
+          openSmsApp(stored, profile.contacts[0]?.phone);
+        }
 
         if (navigator.geolocation) {
           watchRef.current = navigator.geolocation.watchPosition(

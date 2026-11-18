@@ -1,6 +1,14 @@
 # Copy to .dev.vars (never commit it) and fill in your own values.
 # Used by `wrangler dev`. For production use `npx wrangler secret put NAME`.
 
+# --- Option A: Textbelt, zero signup, 1 real text per day ---
+# Set this and SOS sends a real SMS with no account. The free key cannot send
+# URLs, so that message carries raw coordinates instead of map/live links.
+# A paid key (textbelt.com/purchase) sends links and more than one text.
+# TEXTBELT_KEY=textbelt
+
+# --- Option B: Twilio, any volume ---
+# Used automatically instead of Textbelt when all three are set.
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
 # A Twilio number in E.164 that is allowed to send SMS, e.g. +447700900123.

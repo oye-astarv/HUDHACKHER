@@ -142,6 +142,15 @@ export async function fetchSession(id: string) {
 }
 
 /**
+ * Hands the alert straight to the phone's messaging app via the sms: scheme,
+ * prefilled and addressed. The only tap left is the phone's own Send button.
+ */
+export function openSmsApp(alert: ActiveAlert, phone?: string): void {
+  const body = `?&body=${encodeURIComponent(alert.message)}`;
+  window.location.href = phone ? `sms:${phone}${body}` : `sms:${body}`;
+}
+
+/**
  * Manual fallback when the server has no SMS credentials or a send failed:
  * opens the phone's own messaging app, prefilled and addressed.
  */
@@ -154,6 +163,5 @@ export async function shareManually(alert: ActiveAlert, phone?: string): Promise
       // dismissed — fall through to the messaging app
     }
   }
-  const body = `?&body=${encodeURIComponent(alert.message)}`;
-  window.location.href = phone ? `sms:${phone}${body}` : `sms:${body}`;
+  openSmsApp(alert, phone);
 }
