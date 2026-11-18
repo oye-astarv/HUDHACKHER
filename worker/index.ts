@@ -34,6 +34,13 @@ export interface Env {
   TEXTBEE_BASE_URL?: string;
   /** Pin a specific textbee device when the account has more than one. */
   TEXTBEE_DEVICE_ID?: string;
+  /** Textmagic: username is the account email, key is the API token. */
+  TEXTMAGIC_USERNAME?: string;
+  TEXTMAGIC_API_KEY?: string;
+  /** Optional sender ID or the trial UK number Textmagic gives you. */
+  TEXTMAGIC_FROM?: string;
+  /** Override the Textmagic host. Only for pointing at a local mock in tests. */
+  TEXTMAGIC_BASE_URL?: string;
   /** Minutes between automatic position texts while an alert is active. */
   SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
@@ -312,16 +319,40 @@ type DispatchResult = { name: string; ok: boolean; error?: string };
 const twilioReady = (env: Env) =>
   Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
 const textbeeReady = (env: Env) => Boolean(env.TEXTBEE_API_KEY);
+const textmagicReady = (env: Env) => Boolean(env.TEXTMAGIC_USERNAME && env.TEXTMAGIC_API_KEY);
 
 /** The public Textbelt key is rate-limited to one text a day. */
 const onFreeTextbelt = (env: Env) =>
-  !twilioReady(env) && !textbeeReady(env) && env.TEXTBELT_KEY === "textbelt";
+  !twilioReady(env) &&
+  !textbeeReady(env) &&
+  !textmagicReady(env) &&
+  env.TEXTBELT_KEY === "textbelt";
 
-/** Twilio, else textbee, else Textbelt. */
+/** Twilio, else textbee, else Textmagic, else Textbelt. Set only one. */
 async function sendSms(env: Env, to: string, body: string): Promise<void> {
   if (twilioReady(env)) return sendViaTwilio(env, to, body);
   if (textbeeReady(env)) return sendViaTextbee(env, to, body);
+  if (textmagicReady(env)) return sendViaTextmagic(env, to, body);
   return sendViaTextbelt(env, to, body);
+}
+
+/** Real UK gateway, no card needed to start. Basic auth: email + API token. */
+async function sendViaTextmagic(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.TEXTMAGIC_BASE_URL ?? "https://rest.textmagic.com").replace(/\/$/, "");
+  const auth = btoa(`${env.TEXTMAGIC_USERNAME}:${env.TEXTMAGIC_API_KEY}`);
+  const form = new URLSearchParams({ text: body, phones: to });
+  if (env.TEXTMAGIC_FROM) form.set("from", env.TEXTMAGIC_FROM);
+  const res = await fetch(`${base}/api/v2/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${auth}`,
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+    },
+    body: form.toString(),
+  });
+  const out = (await res.json().catch(() => null)) as { message?: string } | null;
+  if (!res.ok) throw new Error(out?.message ?? `HTTP ${res.status}`);
 }
 
 /** Free tier: the message is pushed to your Android phone, which sends the SMS. */
@@ -492,7 +523,8 @@ async function trigger(req: Request, env: Env): Promise<Response> {
       `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} walking to ${targetName}.`
     : message;
 
-  const configured = twilioReady(env) || textbeeReady(env) || Boolean(env.TEXTBELT_KEY);
+  const configured =
+    twilioReady(env) || textbeeReady(env) || textmagicReady(env) || Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
@@ -520,9 +552,11 @@ async function trigger(req: Request, env: Env): Promise<Response> {
         ? "twilio"
         : textbeeReady(env)
           ? "textbee"
-          : env.TEXTBELT_KEY
-            ? "textbelt"
-            : null,
+          : textmagicReady(env)
+            ? "textmagic"
+            : env.TEXTBELT_KEY
+              ? "textbelt"
+              : null,
       results,
       configured,
     },

@@ -1,5 +1,8 @@
 # Copy to .dev.vars (never commit it) and fill in your own values.
 # Used by `wrangler dev`. For production use `npx wrangler secret put NAME`.
+#
+# Pick ONE sender. If several are set the Worker prefers Twilio, then textbee,
+# then Textmagic, then Textbelt.
 
 # --- Sender 1: Twilio (any volume, sends the map + live tracking links) ---
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -22,8 +25,17 @@ SMS_UPDATE_MINUTES=10
 # Testing only: point it at a mock instead of the real gateway.
 # TEXTBEE_BASE_URL=http://127.0.0.1:9100
 
-# --- Sender 3: Textbelt (no monthly fee, one-time credit pack) ---
-# Used automatically when the three Twilio values are absent. The public
+# --- Sender 3: Textmagic (real UK gateway, no card for the trial) ---
+# Username is your account email, key is the API token. TEXTMAGIC_FROM is
+# optional: leave it out to send from the trial UK number they give you.
+# TEXTMAGIC_USERNAME=you@example.com
+# TEXTMAGIC_API_KEY=your_textmagic_token
+# TEXTMAGIC_FROM=SafeStride
+# Testing only: point it at a mock instead of the real gateway.
+# TEXTMAGIC_BASE_URL=http://127.0.0.1:9101
+
+# --- Sender 4: Textbelt (no monthly fee, one-time credit pack) ---
+# Last fallback, used when no other sender is configured. The public
 # "textbelt" key refuses UK numbers, so only a purchased key is useful here.
 # TEXTBELT_KEY=your_purchased_textbelt_key
 
