@@ -18,8 +18,17 @@ export type PreparedGraph = {
   edgeMid: [number, number][];
 };
 
+// Edge flags — set in scripts/build-data.mjs. Graphs built before v2 only carry PARK/PATH.
 export const FLAG_PARK = 1;
 export const FLAG_PATH = 2;
+export const FLAG_MAJOR = 4;
+export const FLAG_ALLEY = 8;
+export const FLAG_STEPS = 16;
+export const FLAG_TUNNEL = 32;
+export const FLAG_CCTV = 64;
+export const FLAG_TRACK = 128;
+export const FLAG_SERVICE = 256;
+export const FLAG_BUSY = 512;
 
 export function prepare(art: GraphArtifact): PreparedGraph {
   const adj: AdjEntry[][] = art.nodes.map(() => []);

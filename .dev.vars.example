@@ -1,23 +1,57 @@
 # Copy to .dev.vars (never commit it) and fill in your own values.
 # Used by `wrangler dev`. For production use `npx wrangler secret put NAME`.
+#
+# Pick ONE sender. If several are set the Worker prefers Twilio, then WhatsApp,
+# then textbee, then Textmagic, then Textbelt.
 
-# --- Option A: Textbelt, zero signup, 1 real text per day ---
-# Set this and SOS sends a real SMS with no account. The free key cannot send
-# URLs, so that message carries raw coordinates instead of map/live links.
-# A paid key (textbelt.com/purchase) sends links and more than one text.
-# TEXTBELT_KEY=textbelt
+# --- Sender 0: WhatsApp Cloud API (free, no card needed) ---
+# Meta creates a test number the moment you add the WhatsApp product to an app.
+# Free-form alerts only reach contacts who have messaged that number in the
+# last 24h, so ask each contact to send it a "hi" once before you demo.
+# WHATSAPP_TOKEN=your_temporary_or_permanent_token
+# WHATSAPP_PHONE_NUMBER_ID=123456789012345
+# WHATSAPP_API_VERSION=v21.0
+# Testing only: point it at a mock instead of the real Graph API.
+# WHATSAPP_BASE_URL=http://127.0.0.1:9102
 
-# --- Option B: Twilio, any volume ---
-# Used automatically instead of Textbelt when all three are set.
+# --- Sender 1: Twilio (any volume, sends the map + live tracking links) ---
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=your_twilio_auth_token
-# A Twilio number in E.164 that is allowed to send SMS, e.g. +447700900123.
+# An SMS-capable Twilio number in E.164, e.g. +447700900123.
 # Trial accounts can only text numbers you have verified in the console.
 TWILIO_SMS_FROM=+447700900123
 
-# Origin put into the tracking link sent to contacts.
-# Locally: http://localhost:3000 (or http://<your-laptop-LAN-IP>:3000 for a second phone)
-PUBLIC_ORIGIN=http://localhost:3000
+# Minutes between automatic UPDATE texts while an alert is active (0 = off).
+# Each update is one SMS per contact, so this is the main cost dial.
+SMS_UPDATE_MINUTES=10
+
+# Testing only: point the Twilio client at a local mock instead of the real API.
+# TWILIO_BASE_URL=http://127.0.0.1:9099
+
+# --- Sender 2: textbee.dev (free: 300 texts/month, no card) ---
+# Sends through your own Android phone's SIM: install their app, register the
+# device, paste the API key here. Used when Twilio is not configured.
+# TEXTBEE_API_KEY=your_textbee_api_key
+# Testing only: point it at a mock instead of the real gateway.
+# TEXTBEE_BASE_URL=http://127.0.0.1:9100
+
+# --- Sender 3: Textmagic (real UK gateway, no card for the trial) ---
+# Username is your account email, key is the API token. TEXTMAGIC_FROM is
+# optional: leave it out to send from the trial UK number they give you.
+# TEXTMAGIC_USERNAME=you@example.com
+# TEXTMAGIC_API_KEY=your_textmagic_token
+# TEXTMAGIC_FROM=SafeStride
+# Testing only: point it at a mock instead of the real gateway.
+# TEXTMAGIC_BASE_URL=http://127.0.0.1:9101
+
+# --- Sender 4: Textbelt (no monthly fee, one-time credit pack) ---
+# Last fallback, used when no other sender is configured. The public
+# "textbelt" key refuses UK numbers, so only a purchased key is useful here.
+# TEXTBELT_KEY=your_purchased_textbelt_key
+
+# Origin for the tracking link sent to contacts. Leave unset in local dev: the
+# Worker then uses whatever host the request came in on (localhost or LAN).
+# PUBLIC_ORIGIN=https://safestride.example.workers.dev
 
 # Only used by `npm run data:news` (node script, reads process.env)
 GROQ_API_KEY=your_groq_key

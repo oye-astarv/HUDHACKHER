@@ -23,11 +23,43 @@ export interface Env {
    * signup — enough to demo a real SMS arriving on a phone.
    */
   TEXTBELT_KEY?: string;
+  /** Override the Twilio API host. Only for pointing at a local mock in tests. */
+  TWILIO_BASE_URL?: string;
+  /**
+   * textbee.dev key: free tier texts through your own Android phone's SIM
+   * (300 messages/month), no card. Used when Twilio is not configured.
+   */
+  TEXTBEE_API_KEY?: string;
+  /** Override the textbee host. Only for pointing at a local mock in tests. */
+  TEXTBEE_BASE_URL?: string;
+  /** Pin a specific textbee device when the account has more than one. */
+  TEXTBEE_DEVICE_ID?: string;
+  /** Textmagic: username is the account email, key is the API token. */
+  TEXTMAGIC_USERNAME?: string;
+  TEXTMAGIC_API_KEY?: string;
+  /** Optional sender ID or the trial UK number Textmagic gives you. */
+  TEXTMAGIC_FROM?: string;
+  /** Override the Textmagic host. Only for pointing at a local mock in tests. */
+  TEXTMAGIC_BASE_URL?: string;
+  /**
+   * WhatsApp Cloud API (Meta). Free test number, no card: alerts reach any
+   * contact who has messaged the number in the last 24 hours.
+   */
+  WHATSAPP_TOKEN?: string;
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  /** Graph API version, e.g. v21.0. Defaults to v21.0. */
+  WHATSAPP_API_VERSION?: string;
+  /** Override the Graph host. Only for pointing at a local mock in tests. */
+  WHATSAPP_BASE_URL?: string;
+  /** Minutes between automatic position texts while an alert is active. */
+  SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
   PUBLIC_ORIGIN?: string;
 }
 
 const SESSION_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
+const DEFAULT_UPDATE_MINUTES = 10;
+const MAX_UPDATES = 12; // caps what one alert can spend on update texts
 const MAX_TRAIL = 240;
 const MAX_PIN_ATTEMPTS = 5;
 const PIN_LOCK_MS = 5 * 60 * 1000;
@@ -42,6 +74,11 @@ type Stored = {
   status: "active" | "safe";
   ownerName: string;
   contactNames: string[];
+  /** Kept for the life of the alert so the follow-up texts can reach them. */
+  contacts: Contact[];
+  trackUrl: string;
+  updateMinutes: number;
+  updatesSent: number;
   target: { name: string; lat: number; lon: number };
   last: Point | null;
   trail: Point[];
@@ -55,7 +92,7 @@ type Stored = {
 
 export type PublicSession = Omit<
   Stored,
-  "ownerKeyHash" | "pinSalt" | "pinHash" | "attempts" | "lockedUntil"
+  "ownerKeyHash" | "pinSalt" | "pinHash" | "attempts" | "lockedUntil" | "contacts"
 >;
 
 // ---------- helpers ----------
@@ -125,21 +162,84 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+/**
+ * The SOS SMS protocol. One alert is up to three kinds of text:
+ *   ALERT  — sent by trigger() the moment SOS is pressed
+ *   UPDATE — repeated by the session's own alarm while it stays active
+ *   SAFE   — sent by the resolve route when the Safety PIN ends the alert
+ * `plain` variants drop URLs for the free Textbelt key, which refuses links.
+ */
+function londonClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  });
+}
+
+function metresBetween(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6371000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+}
+
+function updateMessages(s: Stored, ms: number): { full: string; plain: string } {
+  const time = londonClock(ms);
+  const p = s.last;
+  const at = p ? `${p.lat.toFixed(5)},${p.lon.toFixed(5)}` : "an unknown position";
+  const away = p ? metresBetween(p, s.target) : null;
+  const near = away != null ? `, ${away}m from ${s.target.name}` : "";
+  return {
+    full: `SafeStride UPDATE ${time}: ${s.ownerName} is at ${at}${near}. Live: ${s.trackUrl}`,
+    plain: `SafeStride UPDATE ${time}: ${s.ownerName} is at ${at}${near}.`,
+  };
+}
+
+function safeMessages(
+  ownerName: string,
+  ms: number,
+  last: Point | null
+): { full: string; plain: string } {
+  const time = londonClock(ms);
+  const at = last ? ` near ${last.lat.toFixed(5)},${last.lon.toFixed(5)}` : "";
+  return {
+    full: `SafeStride SAFE ${time}: ${ownerName} marked themselves safe${at}. Live tracking has stopped.`,
+    plain: `SafeStride SAFE ${time}: ${ownerName} marked themselves safe${at}. Live tracking has stopped.`,
+  };
+}
+
+async function sendToContacts(
+  env: Env,
+  contacts: Contact[],
+  msg: { full: string; plain: string }
+): Promise<void> {
+  const body = onFreeTextbelt(env) ? msg.plain : msg.full;
+  await Promise.all(
+    contacts.map((c) => sendSms(env, c.phone, body).catch(() => undefined))
+  );
+}
+
 // ---------- Durable Object ----------
 
 export class TrackSession extends DurableObject<Env> {
   async init(record: Stored): Promise<boolean> {
     if (await this.ctx.storage.get("s")) return false;
     await this.ctx.storage.put("s", record);
-    await this.ctx.storage.setAlarm(Date.now() + SESSION_TTL_MS);
+    const firstUpdate = Date.now() + record.updateMinutes * 60_000;
+    await this.ctx.storage.setAlarm(Math.min(firstUpdate, Date.now() + SESSION_TTL_MS));
     return true;
   }
 
   async read(): Promise<PublicSession | null> {
     const s = await this.ctx.storage.get<Stored>("s");
     if (!s) return null;
-    const { ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, ...pub } = s;
-    void ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil;
+    const { ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, contacts, ...pub } = s;
+    void ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, contacts;
     return pub;
   }
 
@@ -154,10 +254,16 @@ export class TrackSession extends DurableObject<Env> {
     return "ok";
   }
 
-  async resolve(
-    ownerKey: string,
-    pinVerifier: string
-  ): Promise<{ ok: boolean; error?: string; retryAfterS?: number; left?: number }> {
+  async resolve(ownerKey: string, pinVerifier: string): Promise<{
+    ok: boolean;
+    error?: string;
+    retryAfterS?: number;
+    left?: number;
+    /** Present on a real transition, so the route can send the SAFE text. */
+    contacts?: Contact[];
+    ownerName?: string;
+    last?: Point | null;
+  }> {
     const s = await this.ctx.storage.get<Stored>("s");
     if (!s) return { ok: false, error: "gone" };
     if (!safeEqual(await sha256(ownerKey), s.ownerKeyHash)) return { ok: false, error: "forbidden" };
@@ -183,11 +289,35 @@ export class TrackSession extends DurableObject<Env> {
     s.resolvedAt = new Date(now).toISOString();
     s.attempts = 0;
     await this.ctx.storage.put("s", s);
-    return { ok: true };
+    await this.ctx.storage.deleteAlarm();
+    return { ok: true, contacts: s.contacts, ownerName: s.ownerName, last: s.last };
   }
 
+  /**
+   * Drives the UPDATE part of the protocol while an alert stays active, then
+   * wipes the session (and the stored contact numbers) when it expires.
+   */
   async alarm(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+    const s = await this.ctx.storage.get<Stored>("s");
+    if (!s) return;
+
+    const expires = new Date(s.expiresAt).getTime();
+    if (Date.now() >= expires) {
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+
+    if (s.status !== "active" || s.updateMinutes <= 0 || s.updatesSent >= MAX_UPDATES) {
+      await this.ctx.storage.setAlarm(expires);
+      return;
+    }
+
+    await sendToContacts(this.env, s.contacts, updateMessages(s, Date.now()));
+    s.updatesSent += 1;
+    await this.ctx.storage.put("s", s);
+    await this.ctx.storage.setAlarm(
+      Math.min(Date.now() + s.updateMinutes * 60_000, expires)
+    );
   }
 }
 
@@ -198,12 +328,104 @@ type DispatchResult = { name: string; ok: boolean; error?: string };
 
 const twilioReady = (env: Env) =>
   Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
+const textbeeReady = (env: Env) => Boolean(env.TEXTBEE_API_KEY);
+const textmagicReady = (env: Env) => Boolean(env.TEXTMAGIC_USERNAME && env.TEXTMAGIC_API_KEY);
+const whatsappReady = (env: Env) => Boolean(env.WHATSAPP_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID);
 
 /** The public Textbelt key is rate-limited to one text a day. */
-const onFreeTextbelt = (env: Env) => !twilioReady(env) && env.TEXTBELT_KEY === "textbelt";
+const onFreeTextbelt = (env: Env) =>
+  !twilioReady(env) &&
+  !textbeeReady(env) &&
+  !textmagicReady(env) &&
+  !whatsappReady(env) &&
+  env.TEXTBELT_KEY === "textbelt";
 
+/**
+ * Twilio, else WhatsApp, else textbee, else Textmagic, else Textbelt.
+ * Set only one; the first one with credentials wins.
+ */
 async function sendSms(env: Env, to: string, body: string): Promise<void> {
-  return twilioReady(env) ? sendViaTwilio(env, to, body) : sendViaTextbelt(env, to, body);
+  if (twilioReady(env)) return sendViaTwilio(env, to, body);
+  if (whatsappReady(env)) return sendViaWhatsapp(env, to, body);
+  if (textbeeReady(env)) return sendViaTextbee(env, to, body);
+  if (textmagicReady(env)) return sendViaTextmagic(env, to, body);
+  return sendViaTextbelt(env, to, body);
+}
+
+/**
+ * WhatsApp Cloud API. Free-form text is allowed while the contact's 24-hour
+ * customer service window is open, i.e. after they have messaged the number.
+ */
+async function sendViaWhatsapp(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.WHATSAPP_BASE_URL ?? "https://graph.facebook.com").replace(/\/$/, "");
+  const version = env.WHATSAPP_API_VERSION ?? "v21.0";
+  const res = await fetch(
+    `${base}/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: to.replace(/^\+/, ""),
+        type: "text",
+        text: { preview_url: true, body },
+      }),
+    }
+  );
+  const out = (await res.json().catch(() => null)) as {
+    error?: { message?: string; code?: number; error_subcode?: number };
+  } | null;
+  if (res.ok) return;
+  const err = out?.error;
+  // 131047: no open 24-hour window, so only an approved template may be sent.
+  if (err?.code === 131047 || err?.error_subcode === 131047) {
+    throw new Error("contact must message this WhatsApp number first");
+  }
+  throw new Error(err?.message ?? `HTTP ${res.status}`);
+}
+
+/** Real UK gateway, no card needed to start. Basic auth: email + API token. */
+async function sendViaTextmagic(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.TEXTMAGIC_BASE_URL ?? "https://rest.textmagic.com").replace(/\/$/, "");
+  const auth = btoa(`${env.TEXTMAGIC_USERNAME}:${env.TEXTMAGIC_API_KEY}`);
+  const form = new URLSearchParams({ text: body, phones: to });
+  if (env.TEXTMAGIC_FROM) form.set("from", env.TEXTMAGIC_FROM);
+  const res = await fetch(`${base}/api/v2/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Basic ${auth}`,
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+    },
+    body: form.toString(),
+  });
+  const out = (await res.json().catch(() => null)) as { message?: string } | null;
+  if (!res.ok) throw new Error(out?.message ?? `HTTP ${res.status}`);
+}
+
+/** Free tier: the message is pushed to your Android phone, which sends the SMS. */
+async function sendViaTextbee(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.TEXTBEE_BASE_URL ?? "https://api.textbee.dev").replace(/\/$/, "");
+  const res = await fetch(`${base}/api/v1/gateway/send-sms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": env.TEXTBEE_API_KEY! },
+    body: JSON.stringify({
+      message: body,
+      recipients: [to],
+      simSlotIndex: 0,
+      ...(env.TEXTBEE_DEVICE_ID ? { deviceId: env.TEXTBEE_DEVICE_ID } : {}),
+    }),
+  });
+  const out = (await res.json().catch(() => null)) as {
+    message?: string;
+    error?: string;
+    smsBatchId?: string;
+  } | null;
+  if (!res.ok) throw new Error(out?.message ?? out?.error ?? `HTTP ${res.status}`);
 }
 
 async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void> {
@@ -221,7 +443,8 @@ async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void
 }
 
 async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> {
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
+  const base = (env.TWILIO_BASE_URL ?? "https://api.twilio.com").replace(/\/$/, "");
+  const url = `${base}/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
   const form = new URLSearchParams({
     From: env.TWILIO_SMS_FROM!,
     To: to,
@@ -235,9 +458,18 @@ async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> 
     },
     body: form,
   });
+  const out = (await res.json().catch(() => null)) as {
+    sid?: string;
+    status?: string;
+    message?: string;
+    code?: number;
+  } | null;
   if (!res.ok) {
-    const detail = (await res.json().catch(() => null)) as { message?: string; code?: number } | null;
-    throw new Error(detail?.message ? `${detail.code ?? res.status}: ${detail.message}` : `HTTP ${res.status}`);
+    throw new Error(out?.message ? `${out.code ?? res.status}: ${out.message}` : `HTTP ${res.status}`);
+  }
+  // Twilio accepts the message (201) but can still report a terminal failure.
+  if (out?.status === "failed" || out?.status === "undelivered") {
+    throw new Error(`Twilio marked the message ${out.status}`);
   }
 }
 
@@ -287,6 +519,14 @@ async function trigger(req: Request, env: Env): Promise<Response> {
   const pinSalt = randomHex(16);
   const now = Date.now();
 
+  const base = publicOrigin(req, env);
+  const trackUrl = `${base}/track/${id}`;
+  const parsedUpdates = Number(env.SMS_UPDATE_MINUTES);
+  const updateMinutes =
+    Number.isFinite(parsedUpdates) && parsedUpdates >= 0
+      ? Math.min(180, Math.floor(parsedUpdates))
+      : DEFAULT_UPDATE_MINUTES;
+
   const record: Stored = {
     id,
     createdAt: new Date(now).toISOString(),
@@ -294,6 +534,10 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     status: "active",
     ownerName,
     contactNames: contacts.map((c) => c.name || "contact"),
+    contacts,
+    trackUrl,
+    updateMinutes,
+    updatesSent: 0,
     target: { name: targetName, lat: target.lat, lon: target.lon },
     last: { lat: origin.lat, lon: origin.lon, ts: now },
     trail: [{ lat: origin.lat, lon: origin.lon, ts: now }],
@@ -308,8 +552,6 @@ async function trigger(req: Request, env: Env): Promise<Response> {
   const stub = env.TRACK.get(env.TRACK.idFromName(id));
   if (!(await stub.init(record))) return json({ error: "collision" }, 500);
 
-  const base = publicOrigin(req, env);
-  const trackUrl = `${base}/track/${id}`;
   const time = new Date(now).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
@@ -333,7 +575,12 @@ async function trigger(req: Request, env: Env): Promise<Response> {
       `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} walking to ${targetName}.`
     : message;
 
-  const configured = twilioReady(env) || Boolean(env.TEXTBELT_KEY);
+  const configured =
+    twilioReady(env) ||
+    whatsappReady(env) ||
+    textbeeReady(env) ||
+    textmagicReady(env) ||
+    Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
@@ -354,9 +601,20 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     trackUrl,
     message,
     expiresAt: record.expiresAt,
+    updatesMinutes: updateMinutes,
     dispatch: {
       mode: configured ? "sms" : "manual",
-      provider: twilioReady(env) ? "twilio" : env.TEXTBELT_KEY ? "textbelt" : null,
+      provider: twilioReady(env)
+        ? "twilio"
+        : whatsappReady(env)
+          ? "whatsapp"
+          : textbeeReady(env)
+            ? "textbee"
+            : textmagicReady(env)
+              ? "textmagic"
+              : env.TEXTBELT_KEY
+                ? "textbelt"
+                : null,
       results,
       configured,
     },
@@ -386,8 +644,16 @@ async function trackRoute(req: Request, env: Env, id: string, action: string | u
 
   if (action === "resolve") {
     const r = await stub.resolve(ownerKey, cleanText(body?.pinVerifier, 128));
+    // Close the loop with the contacts: the alert ends with an explicit SAFE.
+    if (r.ok && r.contacts?.length) {
+      await sendToContacts(
+        env,
+        r.contacts,
+        safeMessages(r.ownerName ?? "The SafeStride user", Date.now(), r.last ?? null)
+      );
+    }
     const status = r.ok ? 200 : r.error === "forbidden" ? 403 : r.error === "gone" ? 404 : r.error === "locked" ? 429 : 401;
-    return json(r, status);
+    return json({ ok: r.ok, error: r.error, retryAfterS: r.retryAfterS, left: r.left }, status);
   }
 
   return json({ error: "not_found" }, 404);

@@ -14,92 +14,138 @@
 
 html,
 body {
-  height: 100%;
-  background: #0a0c0f;
-  color: #e6e9ee;
+  background: #0e0e10;
+  color: #f4f4f5;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
-  font-feature-settings: "kern" 1;
 }
 
 body {
   margin: 0;
-  min-height: -webkit-fill-available;
+  /* dotted backdrop around the phone column on wide screens */
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 18px 18px;
 }
 
-#app-shell {
-  height: var(--app-h);
+@layer components {
+  .ss-input {
+    @apply w-full rounded-lg border border-edge bg-ink px-3 py-2.5 text-[14px] text-zinc-100 placeholder:text-zinc-500 focus:border-safe/70 focus:outline-none;
+  }
 }
 
-/* Leaflet needs an explicit stacking context we control */
 .leaflet-container {
-  background: #0a0c0f;
+  background: #111113;
   font: inherit;
-  outline: none;
-}
-
-/* Desaturate the basemap so route colours carry the only saturated hues. */
-.map-tiles {
-  filter: grayscale(0.4) brightness(0.92) contrast(1.06);
 }
 
 .leaflet-control-attribution {
-  background: rgba(10, 12, 15, 0.75) !important;
-  color: #6b7481 !important;
+  background: rgba(14, 14, 16, 0.75) !important;
+  color: #71717a !important;
   font-size: 9px !important;
-  letter-spacing: 0.01em !important;
-  padding: 2px 6px !important;
 }
 
 .leaflet-control-attribution a {
-  color: #8a93a0 !important;
-  text-decoration: none !important;
+  color: #a1a1aa !important;
 }
 
-/* Leaflet's own tooltip chrome, matched to the panel language. */
-.leaflet-tooltip {
-  background: #111419 !important;
-  border: 1px solid #232830 !important;
-  border-radius: 6px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
-  color: #e6e9ee !important;
-  font-size: 11px !important;
-  line-height: 1.45 !important;
-  padding: 6px 8px !important;
+/* OSM tiles darkened (CARTO now requires an API key) */
+.dark-tiles {
+  /* darker and lower-contrast than the routes so coloured lines stand out */
+  filter: invert(1) hue-rotate(180deg) brightness(0.55) contrast(1.15) saturate(0.25);
 }
 
-.leaflet-tooltip-top:before,
-.leaflet-tooltip-bottom:before,
-.leaflet-tooltip-left:before,
-.leaflet-tooltip-right:before {
-  border-top-color: #232830 !important;
-  border-bottom-color: #232830 !important;
+.ss-pin {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font: 800 13px/1 Inter, system-ui, sans-serif;
+  border: 2px solid #0e0e10;
+  box-shadow: 0 0 0 2px #ffffff, 0 4px 12px rgba(0, 0, 0, 0.6);
+}
+.ss-pin-a {
+  background: #ffffff;
+  color: #0e0e10;
+}
+.ss-pin-b {
+  background: #d92d2d;
+  color: #ffffff;
 }
 
-.leaflet-tooltip a {
-  color: #7fbfa8 !important;
+/* map callouts, styled after the design mock */
+.leaflet-tooltip.ss-callout {
+  background: rgba(14, 14, 16, 0.94);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: #f4f4f5;
+  font-size: 11px;
+  line-height: 1.35;
+  box-shadow: none;
+  white-space: nowrap;
+}
+.leaflet-tooltip.ss-callout::before {
+  display: none;
+}
+.ss-callout-green {
+  border: 1px solid #4ade80 !important;
+}
+.ss-callout-venue {
+  border: 1px solid #52525b !important;
+  padding: 3px 6px !important;
+  font-size: 10px !important;
+}
+.ss-callout-amber {
+  border: 1px solid #f59e0b !important;
+}
+.ss-callout-amber .ss-callout-title {
+  color: #fbbf24;
+}
+.ss-callout-title {
+  font-weight: 700;
+}
+.ss-callout-dist {
+  color: #4ade80;
+  font-weight: 600;
+}
+.ss-callout-sub {
+  color: #a1a1aa;
+  font-size: 10px;
 }
 
-/* Form fields, shared by the contacts setup form. */
-.ss-input {
-  min-width: 0;
-  border-radius: 8px;
-  border: 1px solid #232830;
-  background: #111419;
-  padding: 10px 12px;
-  font-size: 13px;
-  color: #e6e9ee;
-  outline: none;
-  transition: border-color 120ms ease;
+.ss-popup .leaflet-popup-content-wrapper {
+  background: #17171a;
+  color: #f4f4f5;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+.ss-popup .leaflet-popup-content {
+  margin: 12px 14px;
+  font-size: 12px;
+}
+.ss-popup .leaflet-popup-tip {
+  background: #17171a;
+  border: 1px solid #f59e0b;
+}
+.ss-popup a.leaflet-popup-close-button {
+  color: #a1a1aa;
 }
 
-.ss-input::placeholder {
-  color: #6b7481;
+.leaflet-tooltip.ss-tag {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #d4d4d8;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0;
 }
-
-.ss-input:focus {
-  border-color: #7fbfa8;
-  box-shadow: 0 0 0 1px rgba(127, 191, 168, 0.3);
+.leaflet-tooltip.ss-tag::before {
+  display: none;
+}
+.ss-tag-green {
+  color: #4ade80 !important;
 }
 
 input[type="range"] {
@@ -109,33 +155,32 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 2px;
+  height: 4px;
   border-radius: 9999px;
-  background: #232830;
+  background: #2a2a2e;
 }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  margin-top: -6px;
-  height: 14px;
-  width: 14px;
+  margin-top: -7px;
+  height: 18px;
+  width: 18px;
   border-radius: 9999px;
-  background: #e6e9ee;
-  border: 2px solid #0a0c0f;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  background: #4ade80;
+  border: 2px solid #0e0e10;
 }
 
 input[type="range"]::-moz-range-track {
-  height: 2px;
+  height: 4px;
   border-radius: 9999px;
-  background: #232830;
+  background: #2a2a2e;
 }
 
 input[type="range"]::-moz-range-thumb {
-  height: 14px;
-  width: 14px;
+  height: 16px;
+  width: 16px;
   border-radius: 9999px;
-  background: #e6e9ee;
-  border: 2px solid #0a0c0f;
+  background: #4ade80;
+  border: 2px solid #0e0e10;
 }

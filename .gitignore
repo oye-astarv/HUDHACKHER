@@ -3,10 +3,8 @@ node_modules/
 out/
 .cache/
 *.log
-# Secrets: every env file is ignored, except the documented template.
 .env
-.env.*
-!.env.example
+.env.local
 .dev.vars
 .wrangler/
 .DS_Store

@@ -4,14 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "dev:api": "wrangler dev --port 8787",
+    "dev:api": "node -e \"require('fs').mkdirSync('out',{recursive:true})\" && wrangler dev --port 8787",
     "build": "next build",
     "preview": "next build && wrangler dev --port 8787",
     "deploy": "next build && wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker/tsconfig.json",
     "data:graph": "node scripts/build-data.mjs",
-    "data:news": "node --env-file-if-exists=.env --env-file-if-exists=.dev.vars scripts/fetch-news.mjs",
-    "dev:https": "next dev -p 3000 --experimental-https"
+    "data:news": "node --env-file-if-exists=.dev.vars scripts/fetch-news.mjs",
+    "eval:routing": "esbuild scripts/eval-routing.ts --bundle --platform=node --format=esm --outfile=.cache/eval-routing.mjs --log-level=warning && node .cache/eval-routing.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

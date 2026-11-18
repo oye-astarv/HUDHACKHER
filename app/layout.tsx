@@ -1,7 +1,4 @@
 import type { Metadata, Viewport } from "next";
-// Leaflet positions its panes/tiles absolutely; without its stylesheet the
-// panes stack in normal flow and the map scatters down the page.
-import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

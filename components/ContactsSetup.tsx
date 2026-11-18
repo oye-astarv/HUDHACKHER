@@ -60,15 +60,14 @@ export default function ContactsSetup({
   return (
     <div className="space-y-4">
       <div>
-        <p className="text-[9.5px] font-semibold uppercase tracking-label text-slate-500">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
           {onboarding ? "10-second setup" : "Trusted network"}
         </p>
-        <h2 className="mt-1 text-[17px] font-semibold tracking-tight text-slate-50">
-          Who should we alert?
-        </h2>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-          Pressing SOS sends them a text with your live location and the safe haven you are walking
-          to. No account needed, and these details stay on this phone.
+        <h2 className="mt-1 text-xl font-bold">Who should we alert?</h2>
+        <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
+          One tap on SOS sends them your live location and the safe haven you are walking to —
+          by text or WhatsApp, whichever is set up. Nothing to install on their side, and this
+          stays on your phone.
         </p>
       </div>
 
@@ -78,12 +77,12 @@ export default function ContactsSetup({
           onChange={(e) => setOwnerName(e.target.value)}
           placeholder="e.g. Sarah"
           autoComplete="given-name"
-          className="ss-input w-full"
+          className="ss-input"
         />
       </Field>
 
       <div className="space-y-2">
-        <p className="text-[9.5px] font-semibold uppercase tracking-label text-slate-500">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           Trusted contacts (up to 3)
         </p>
         {contacts.map((c, i) => (
@@ -107,7 +106,7 @@ export default function ContactsSetup({
             {contacts.length > 1 && (
               <button
                 onClick={() => setContacts((cs) => cs.filter((_, j) => j !== i))}
-                className="w-9 shrink-0 rounded-lg border border-edge/80 text-slate-500 transition hover:text-slate-300"
+                className="rounded-lg border border-edge px-2 text-slate-500"
                 aria-label={`Remove contact ${i + 1}`}
               >
                 ✕
@@ -130,7 +129,7 @@ export default function ContactsSetup({
       </div>
 
       <div className="space-y-2">
-        <p className="text-[9.5px] font-semibold uppercase tracking-label text-slate-500">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           Safety PIN {profile?.pinVerifier ? "(leave blank to keep current)" : ""}
         </p>
         <div className="flex gap-2">
@@ -158,25 +157,15 @@ export default function ContactsSetup({
         </p>
       </div>
 
-      {error && (
-        <p className="rounded-md border border-fast/40 bg-fast/10 px-3 py-2 text-[11px] leading-relaxed text-fast">
-          {error}
-        </p>
-      )}
+      {error && <p className="rounded-lg border border-fast/40 bg-fast/10 px-3 py-2 text-[12px] text-red-300">{error}</p>}
 
       <div className="flex gap-2">
         {onCancel && (
-          <button
-            onClick={onCancel}
-            className="flex-1 rounded-card border border-edge/80 py-3 text-[13px] font-semibold text-slate-300 transition hover:bg-white/[0.03]"
-          >
+          <button onClick={onCancel} className="flex-1 rounded-xl border border-edge py-3 text-sm font-semibold text-slate-300">
             Cancel
           </button>
         )}
-        <button
-          onClick={save}
-          className="flex-[2] rounded-card bg-safe py-3 text-[13px] font-semibold text-ink transition active:scale-[0.99]"
-        >
+        <button onClick={save} className="flex-[2] rounded-xl bg-safe py-3 text-sm font-bold text-ink">
           {onboarding ? "Save and continue" : "Save network"}
         </button>
       </div>
@@ -187,7 +176,7 @@ export default function ContactsSetup({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="text-[9.5px] font-semibold uppercase tracking-label text-slate-500">{label}</span>
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</span>
       {children}
     </label>
   );

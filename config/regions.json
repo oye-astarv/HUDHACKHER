@@ -1,0 +1,45 @@
+[
+  {
+    "id": "huddersfield",
+    "name": "Huddersfield",
+    "county": "West Yorkshire",
+    "centre": [53.6458, -1.785],
+    "radiusM": 2500,
+    "police": "West Yorkshire Police",
+    "bbcFeed": "https://feeds.bbci.co.uk/news/england/leeds_and_west_yorkshire/rss.xml",
+    "localFeeds": [
+      { "name": "ExaminerLive · Huddersfield", "url": "https://www.examinerlive.co.uk/all-about/huddersfield?service=rss" },
+      { "name": "ExaminerLive · crime", "url": "https://www.examinerlive.co.uk/all-about/crime?service=rss", "localOnly": true }
+    ],
+    "publishers": ["ExaminerLive", "Huddersfield Examiner", "Huddersfield Hub", "Kirklees Council"],
+    "areas": ["huddersfield", "kirklees", "lindley", "birkby", "fartown", "newsome", "lockwood", "paddock", "almondbury", "moldgreen", "dalton", "edgerton", "marsh", "crosland moor", "salendine nook", "sheepridge", "deighton", "bradley", "aspley", "longroyd bridge", "milnsbridge"],
+    "outside": ["bradford", "leeds", "halifax", "wakefield", "dewsbury", "batley", "holmfirth", "honley", "marsden", "slaithwaite", "meltham", "mirfield", "brighouse", "elland", "keighley", "barnsley", "netherton", "kirkburton", "denby dale"],
+    "landmarks": ["St George's Square", "Kingsgate", "Packhorse", "Market Place", "Castlegate", "ring road", "Huddersfield station", "Huddersfield bus station", "Greenhead Park", "Beaumont Park", "University of Huddersfield", "John Smith's Stadium", "Ravensknowle Park", "Queensgate Market", "Piazza", "Northumberland Street", "Westgate", "New Street", "John William Street", "Wakefield Road", "Manchester Road", "Leeds Road", "Trinity Street", "Halifax Road", "Bradford Road", "Lockside"],
+    "presets": [
+      { "id": "shift", "label": "Late shift → Aspley", "from": { "lat": 53.6459, "lon": -1.7826, "name": "St George's Square" }, "to": { "lat": 53.6446, "lon": -1.7996, "name": "Aspley Halls" } },
+      { "id": "commuter", "label": "Station → University", "from": { "lat": 53.6484, "lon": -1.7849, "name": "Huddersfield Station" }, "to": { "lat": 53.6431, "lon": -1.7781, "name": "University of Huddersfield" } },
+      { "id": "newsome", "label": "Town → Newsome", "from": { "lat": 53.6462, "lon": -1.7809, "name": "Market Place" }, "to": { "lat": 53.6338, "lon": -1.7889, "name": "Newsome" } }
+    ]
+  },
+  {
+    "id": "leeds",
+    "name": "Leeds",
+    "county": "West Yorkshire",
+    "centre": [53.7997, -1.5492],
+    "radiusM": 2200,
+    "police": "West Yorkshire Police",
+    "bbcFeed": "https://feeds.bbci.co.uk/news/england/leeds_and_west_yorkshire/rss.xml",
+    "localFeeds": [
+      { "name": "LeedsLive", "url": "https://www.leeds-live.co.uk/news/?service=rss" }
+    ],
+    "publishers": ["LeedsLive", "Leeds Live", "Yorkshire Evening Post", "Leeds City Council"],
+    "areas": ["leeds", "city centre", "headingley", "hyde park", "woodhouse", "little london", "holbeck", "hunslet", "burley", "kirkstall", "chapel allerton", "harehills", "beeston", "burmantofts", "sheepscar", "mabgate", "quarry hill", "armley", "richmond hill", "briggate", "call lane"],
+    "outside": ["bradford", "huddersfield", "halifax", "wakefield", "dewsbury", "batley", "harrogate", "york", "otley", "wetherby", "castleford", "pontefract", "morley", "pudsey", "garforth", "rothwell", "keighley"],
+    "landmarks": ["Leeds station", "Leeds bus station", "Briggate", "Call Lane", "Kirkgate Market", "City Square", "Millennium Square", "Park Square", "The Headrow", "Boar Lane", "Albion Street", "Vicar Lane", "Woodhouse Moor", "Hyde Park Corner", "University of Leeds", "Leeds Beckett", "Trinity Leeds", "Victoria Gate", "Granary Wharf", "Leeds Dock", "Merrion Centre", "First Direct Arena", "Woodhouse Lane", "Kirkstall Road", "Wellington Street"],
+    "presets": [
+      { "id": "station-hydepark", "label": "Station → Hyde Park", "from": { "lat": 53.7954, "lon": -1.5476, "name": "Leeds Station" }, "to": { "lat": 53.8095, "lon": -1.5605, "name": "Hyde Park Corner" } },
+      { "id": "calllane-uni", "label": "Call Lane → University", "from": { "lat": 53.7958, "lon": -1.5404, "name": "Call Lane" }, "to": { "lat": 53.8067, "lon": -1.5550, "name": "University of Leeds" } },
+      { "id": "briggate-holbeck", "label": "Briggate → Holbeck", "from": { "lat": 53.7972, "lon": -1.5418, "name": "Briggate" }, "to": { "lat": 53.7880, "lon": -1.5560, "name": "Holbeck" } }
+    ]
+  }
+]

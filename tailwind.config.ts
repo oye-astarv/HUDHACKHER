@@ -5,33 +5,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#0A0C0F",
-        panel: "#111419",
-        "panel-strong": "#15181E",
-        edge: "#232830",
-        // Muted enough to read as cartography rather than neon signage.
-        safe: "#7FBFA8",
-        fast: "#D4715B",
-        warn: "#C9A227",
+        ink: "#0E0E10",
+        panel: "#17171A",
+        edge: "#2A2A2E",
+        safe: "#4ADE80",
+        fast: "#9CA3AF",
         alarm: "#D92D2D",
-        haven: "#9AD6C0",
-        muted: "#8A93A0",
+        warn: "#F59E0B",
+        haven: "#4ADE80",
       },
       fontFamily: {
-        sans: [
-          "-apple-system",
-          "BlinkMacSystemFont",
-          "Segoe UI",
-          "Inter",
-          "Roboto",
-          "sans-serif",
-        ],
-      },
-      letterSpacing: {
-        label: "0.09em",
-      },
-      borderRadius: {
-        card: "10px",
+        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
       },
     },
   },
