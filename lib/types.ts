@@ -58,16 +58,30 @@ export type Venue = {
 };
 
 export type Incident = {
+  id?: string;
   category: string;
+  headline?: string;
   street: string;
   summary: string;
-  lat: number;
-  lon: number;
+  /** street | landmark | area | none — only street/landmark get coordinates */
+  precision?: string;
+  /** null when the report names no mappable place: listed, not pinned or routed around */
+  lat: number | null;
+  lon: number | null;
   publishedAt: string;
+  firstReportedAt?: string;
+  occurredAt?: string | null;
+  occurredText?: string | null;
   url: string;
   source?: string;
+  publisher?: string;
+  alsoReported?: string[];
+  /** "llm" (AI-extracted) or "heuristic" (keyword match) */
   confidence?: string;
 };
+
+export type MappedIncident = Incident & { lat: number; lon: number };
+export const isMapped = (i: Incident): i is MappedIncident => i.lat != null && i.lon != null;
 
 export type RouteAudit = {
   metres: number;
@@ -82,6 +96,17 @@ export type RouteAudit = {
   openVenues: number;
   incidentsOnPath: number;
   tier1Venues: number;
+  /** share of distance on primary/secondary/tertiary roads */
+  mainRoadShare: number;
+  /** share on pedestrian high streets or by bus stops */
+  busyShare: number;
+  cctvMetres: number;
+  alleyMetres: number;
+  underpassMetres: number;
+  trackMetres: number;
+  serviceMetres: number;
+  stepsMetres: number;
+  footpathMetres: number;
 };
 
 export type RouteResult = {

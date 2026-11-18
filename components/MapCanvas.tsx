@@ -3,15 +3,20 @@
 import { useEffect } from "react";
 import "leaflet/dist/leaflet.css";
 import {
+  Circle,
   CircleMarker,
   MapContainer,
   Polyline,
+  Popup,
   TileLayer,
   Tooltip,
   useMap,
   useMapEvents,
 } from "react-leaflet";
-import type { Incident, RouteResult, Venue } from "@/lib/types";
+import IncidentDetails from "@/components/IncidentDetails";
+import { timeAgo } from "@/lib/incidents";
+import { tierLabel } from "@/lib/venues";
+import { isMapped, type Incident, type RouteResult, type Venue } from "@/lib/types";
 
 export type LabelledVenue = { venue: Venue; metres: number; note: string };
 
@@ -32,6 +37,8 @@ type Props = {
   onPick?: (lat: number, lon: number) => void;
   /** small, non-interactive inset (SOS guidance card) */
   compact?: boolean;
+  /** GPS accuracy circle around the user's position */
+  accuracy?: { centre: [number, number]; metres: number } | null;
 };
 
 const GREEN = "#4ADE80";
@@ -82,6 +89,7 @@ export default function MapCanvas({
   trail = [],
   onPick,
   compact = false,
+  accuracy = null,
 }: Props) {
   const fitCoords: [number, number][] = sos
     ? [...sos.coords, ...(walk ? [walk] : [])]
@@ -174,8 +182,7 @@ export default function MapCanvas({
             <Tooltip>
               <b>{v.name}</b>
               <br />
-              {v.tier === 1 ? "Staffed venue (Ask for Angela)" : "Late-night staffed"} · {v.hours}
-              {v.assumed ? " (hours assumed)" : ""}
+              {tierLabel(v)} · {v.hours}
             </Tooltip>
           </CircleMarker>
         ))}
@@ -199,20 +206,46 @@ export default function MapCanvas({
       ))}
 
       {!compact &&
-        incidents.map((inc, i) => (
+        incidents.filter(isMapped).map((inc, i) => (
           <CircleMarker
-            key={`inc-${i}`}
+            key={`inc-${inc.id ?? i}`}
             center={[inc.lat, inc.lon]}
-            radius={9}
+            radius={11}
+            bubblingMouseEvents={false}
             pathOptions={{ color: AMBER, fillColor: AMBER, fillOpacity: 0.35, weight: 2, dashArray: "3 3" }}
           >
-            <Tooltip permanent direction="top" offset={[0, -8]} className="ss-callout ss-callout-amber" interactive>
+            {/* 100 m detour radius the router applies */}
+            <Tooltip permanent direction="top" offset={[0, -10]} className="ss-callout ss-callout-amber">
               <span className="ss-callout-title">! {inc.category}</span>
               <br />
-              <span className="ss-callout-sub">{inc.street}</span>
+              <span className="ss-callout-sub">
+                {inc.street} · {timeAgo(inc.firstReportedAt ?? inc.publishedAt)} · tap
+              </span>
             </Tooltip>
+            <Popup className="ss-popup" maxWidth={290} minWidth={240} autoPanPadding={[16, 16]}>
+              <IncidentDetails inc={inc} />
+            </Popup>
           </CircleMarker>
         ))}
+      {!compact &&
+        incidents.filter(isMapped).map((inc, i) => (
+          <Circle
+            key={`inc-r-${inc.id ?? i}`}
+            center={[inc.lat, inc.lon]}
+            radius={100}
+            pathOptions={{ color: AMBER, weight: 1, opacity: 0.4, fillOpacity: 0.06, dashArray: "2 6" }}
+            interactive={false}
+          />
+        ))}
+
+      {accuracy && accuracy.metres < 2000 && (
+        <Circle
+          center={accuracy.centre}
+          radius={accuracy.metres}
+          interactive={false}
+          pathOptions={{ color: "#3B82F6", weight: 1, opacity: 0.6, fillColor: "#3B82F6", fillOpacity: 0.12 }}
+        />
+      )}
 
       {origin && (
         <CircleMarker

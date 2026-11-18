@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { bboxOf, inRegion, type Region } from "@/lib/regions";
 import type { Venue } from "@/lib/types";
 
 export type Place = { lat: number; lon: number; name: string; detail?: string };
 
-// Same box the walk graph covers; results outside it can't be routed.
-const BBOX = { s: 53.6188, w: -1.8305, n: 53.6728, e: -1.7395 };
-const inBox = (lat: number, lon: number) =>
-  lat >= BBOX.s && lat <= BBOX.n && lon >= BBOX.w && lon <= BBOX.e;
 
 /**
  * Destination search. Mapped venues match instantly (offline); addresses,
@@ -20,11 +17,16 @@ export default function SearchBox({
   onSelect,
   placeholder = "Where are you going? Street, venue or postcode",
   className = "",
+  ariaLabel = "Search destination",
+  region,
 }: {
+  /** results are limited to this region's map area — outside it can't be routed */
+  region: Region;
   venues: Venue[];
   onSelect: (p: Place) => void;
   placeholder?: string;
   className?: string;
+  ariaLabel?: string;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -34,6 +36,7 @@ export default function SearchBox({
   const abortRef = useRef<AbortController | null>(null);
 
   const q = query.trim();
+  const bbox = useMemo(() => bboxOf(region), [region]);
 
   const local: Place[] =
     q.length >= 2
@@ -61,7 +64,7 @@ export default function SearchBox({
           format: "jsonv2",
           limit: "6",
           countrycodes: "gb",
-          viewbox: `${BBOX.w},${BBOX.n},${BBOX.e},${BBOX.s}`,
+          viewbox: `${bbox.w},${bbox.n},${bbox.e},${bbox.s}`,
           bounded: "1",
         });
         const res = await fetch(
@@ -86,7 +89,7 @@ export default function SearchBox({
                 detail: parts.slice(1, 3).join(", "),
               };
             })
-            .filter((p) => inBox(p.lat, p.lon))
+            .filter((p) => inRegion(region, p.lat, p.lon))
         );
       } catch (e) {
         if ((e as Error).name !== "AbortError") setError("Search unavailable — tap the map instead.");
@@ -95,7 +98,7 @@ export default function SearchBox({
       }
     }, 700);
     return () => clearTimeout(id);
-  }, [q]);
+  }, [q, bbox, region]);
 
   const results = [
     ...local,
@@ -125,7 +128,7 @@ export default function SearchBox({
           if (e.key === "Escape") setOpen(false);
         }}
         placeholder={placeholder}
-        aria-label="Search destination"
+        aria-label={ariaLabel}
         className={
           className ||
           "w-full rounded-xl border border-edge bg-panel/90 px-3 py-2 text-[13px] text-slate-200 placeholder:text-slate-500 focus:border-safe/60 focus:outline-none"
@@ -150,7 +153,7 @@ export default function SearchBox({
           {error && <li className="px-3 py-2 text-[11px] text-red-300">{error}</li>}
           {!loading && !error && results.length === 0 && q.length >= 3 && (
             <li className="px-3 py-2 text-[11px] text-slate-500">
-              No matches inside the Huddersfield area.
+              No matches inside the {region.name} map area.
             </li>
           )}
         </ul>

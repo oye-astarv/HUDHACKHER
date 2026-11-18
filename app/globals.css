@@ -88,6 +88,25 @@ body {
   font-size: 10px;
 }
 
+.ss-popup .leaflet-popup-content-wrapper {
+  background: #17171a;
+  color: #f4f4f5;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+.ss-popup .leaflet-popup-content {
+  margin: 12px 14px;
+  font-size: 12px;
+}
+.ss-popup .leaflet-popup-tip {
+  background: #17171a;
+  border: 1px solid #f59e0b;
+}
+.ss-popup a.leaflet-popup-close-button {
+  color: #a1a1aa;
+}
+
 .leaflet-tooltip.ss-tag {
   background: transparent;
   border: 0;

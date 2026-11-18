@@ -1,13 +1,22 @@
 import { distanceM } from "./geo";
 import {
   aStar,
+  FLAG_ALLEY,
+  FLAG_BUSY,
+  FLAG_CCTV,
+  FLAG_MAJOR,
   FLAG_PARK,
   FLAG_PATH,
+  FLAG_SERVICE,
+  FLAG_STEPS,
+  FLAG_TRACK,
+  FLAG_TUNNEL,
   snap,
   type AdjEntry,
   type PreparedGraph,
 } from "./graph";
 import {
+  isMapped,
   LIGHT,
   type Incident,
   type RouteAudit,
@@ -57,11 +66,12 @@ export function incidentEdgeSet(
   incidents: Incident[]
 ): Set<number> {
   const out = new Set<number>();
-  if (incidents.length === 0) return out;
+  const mapped = incidents.filter(isMapped);
+  if (mapped.length === 0) return out;
 
   for (let i = 0; i < g.edgeMid.length; i++) {
     const [lat, lon] = g.edgeMid[i];
-    for (const inc of incidents) {
+    for (const inc of mapped) {
       if (distanceM(lat, lon, inc.lat, inc.lon) <= 100) {
         out.add(i);
         break;
@@ -71,12 +81,43 @@ export function incidentEdgeSet(
   return out;
 }
 
+/**
+ * Street-type factor: common pedestrian-safety indicators beyond lighting.
+ * After dark, isolated and enclosed spaces (alleys, underpasses, tracks, service
+ * yards) cost more; main roads, pedestrian high streets, bus stops (footfall)
+ * and CCTV-covered stretches cost a little less. In daylight only the worst
+ * (underpasses, alleys, tracks) are mildly avoided.
+ */
+export const STREET_FACTORS = {
+  dark: { tunnel: 3, alley: 2.2, track: 2.5, service: 1.35, steps: 1.3, major: 0.9, busy: 0.9, cctv: 0.92 },
+  day: { tunnel: 1.3, alley: 1.15, track: 1.2, service: 1, steps: 1, major: 1, busy: 1, cctv: 1 },
+} as const;
+
+export function streetFactor(flags: number, isDark: boolean): number {
+  const k = isDark ? STREET_FACTORS.dark : STREET_FACTORS.day;
+  let m = 1;
+  if (flags & FLAG_TUNNEL) m *= k.tunnel;
+  if (flags & FLAG_ALLEY) m *= k.alley;
+  if (flags & FLAG_TRACK) m *= k.track;
+  if (flags & FLAG_SERVICE) m *= k.service;
+  if (flags & FLAG_STEPS) m *= k.steps;
+  if (flags & FLAG_MAJOR) m *= k.major;
+  if (flags & FLAG_BUSY) m *= k.busy;
+  if (flags & FLAG_CCTV) m *= k.cctv;
+  return m;
+}
+
+/** Open venue within 50 m at this hour ("eyes on the street"). */
+export const OPEN_VENUE_FACTOR = 0.7;
+export const INCIDENT_FACTOR = 5;
+
 function safeWeight(entry: AdjEntry, ctx: RouteContext): number {
   let cost = entry.len;
   cost *= lightingFactor(entry, ctx.isDark);
+  cost *= streetFactor(entry.flags, ctx.isDark);
   // Mild enough that "eyes on the street" can't outvote an unlit shortcut.
-  if (ctx.isDark && ((entry.openMask >> ctx.hour) & 1) === 1) cost *= 0.75;
-  if (ctx.incidentEdges.has(entry.edge)) cost *= 5;
+  if (ctx.isDark && ((entry.openMask >> ctx.hour) & 1) === 1) cost *= OPEN_VENUE_FACTOR;
+  if (ctx.incidentEdges.has(entry.edge)) cost *= INCIDENT_FACTOR;
   return cost;
 }
 
@@ -95,10 +136,20 @@ function auditRoute(
   let parkMetres = 0;
   const nearVenues = new Set<number>();
   let tier1 = 0;
+  const m = { major: 0, busy: 0, cctv: 0, alley: 0, tunnel: 0, track: 0, service: 0, steps: 0, footpath: 0 };
 
   for (const ei of path.edges) {
     const [, , len, light, , flags] = g.art.edges[ei];
     if ((flags & FLAG_PARK) !== 0) parkMetres += len;
+    if (flags & FLAG_MAJOR) m.major += len;
+    if (flags & FLAG_BUSY) m.busy += len;
+    if (flags & FLAG_CCTV) m.cctv += len;
+    if (flags & FLAG_ALLEY) m.alley += len;
+    if (flags & FLAG_TUNNEL) m.tunnel += len;
+    if (flags & FLAG_TRACK) m.track += len;
+    if (flags & FLAG_SERVICE) m.service += len;
+    if (flags & FLAG_STEPS) m.steps += len;
+    if (flags & FLAG_PATH && !(flags & (FLAG_STEPS | FLAG_TRACK))) m.footpath += len;
 
     if (light === LIGHT.TAGGED_YES || light === LIGHT.LAMP_NEAR) lit += len;
     else if (light === LIGHT.CLASS_PRIOR) inferred += len;
@@ -114,7 +165,7 @@ function auditRoute(
   }
 
   // incidents the *fastest* route would have walked through but this one avoids
-  const incidentsOnPath = incidents.filter((inc) =>
+  const incidentsOnPath = incidents.filter(isMapped).filter((inc) =>
     path.edges.some((ei) => {
       const mid = g.edgeMid[ei];
       return distanceM(mid[0], mid[1], inc.lat, inc.lon) <= 100;
@@ -134,6 +185,15 @@ function auditRoute(
     openVenues: nearVenues.size,
     incidentsOnPath,
     tier1Venues: tier1,
+    mainRoadShare: m.major / total,
+    busyShare: m.busy / total,
+    cctvMetres: Math.round(m.cctv),
+    alleyMetres: Math.round(m.alley),
+    underpassMetres: Math.round(m.tunnel),
+    trackMetres: Math.round(m.track),
+    serviceMetres: Math.round(m.service),
+    stepsMetres: Math.round(m.steps),
+    footpathMetres: Math.round(m.footpath),
   };
 }
 
@@ -161,7 +221,8 @@ export function computeRoutes(args: {
   };
 
   const fastestPath = aStar(graph, start, goal, (e) => e.len, 1);
-  const safePath = aStar(graph, start, goal, (e) => safeWeight(e, ctx), 0.5);
+  // lowest possible combined multiplier ≈ 0.85·0.9·0.9·0.92·0.7 ≈ 0.44
+  const safePath = aStar(graph, start, goal, (e) => safeWeight(e, ctx), 0.42);
 
   if (!fastestPath || !safePath) {
     return { error: "No walkable route found between those points." };

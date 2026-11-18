@@ -1,13 +1,15 @@
 "use client";
 
 import SunCalc from "suncalc";
+import { dataPath, type Region } from "./regions";
 import type { GraphArtifact, Incident, Venue } from "./types";
 
 const CACHE = new Map<string, unknown>();
 
 async function loadJson<T>(path: string): Promise<T> {
   if (CACHE.has(path)) return CACHE.get(path) as T;
-  const res = await fetch(path, { cache: "force-cache" });
+  // revalidate: data files are rebuilt between demos and must not go stale
+  const res = await fetch(path, { cache: "no-cache" });
   if (!res.ok) throw new Error(`Failed to load ${path} (${res.status})`);
   const data = (await res.json()) as T;
   CACHE.set(path, data);
@@ -20,11 +22,12 @@ export type DataBundle = {
   incidents: Incident[];
 };
 
-export async function loadData(): Promise<DataBundle> {
+/** One region's street graph, safe havens and news (public/data/<region>/). */
+export async function loadData(region: Region): Promise<DataBundle> {
   const [graph, venues, incidents] = await Promise.all([
-    loadJson<GraphArtifact>("/data/graph.json"),
-    loadJson<Venue[]>("/data/venues.json"),
-    loadJson<Incident[]>("/data/incidents.json").catch(() => [] as Incident[]),
+    loadJson<GraphArtifact>(dataPath(region, "graph.json")),
+    loadJson<Venue[]>(dataPath(region, "venues.json")),
+    loadJson<Incident[]>(dataPath(region, "incidents.json")).catch(() => [] as Incident[]),
   ]);
   return { graph, venues, incidents };
 }

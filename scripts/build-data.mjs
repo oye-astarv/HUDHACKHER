@@ -3,24 +3,66 @@
  * SafeStride data builder.
  *
  * Pulls the walkable street network, park polygons, street lamps and
- * late-night venues around Huddersfield town centre from Overpass, then bakes
+ * late-night venues around one region's centre (config/regions.json) from Overpass, then bakes
  * a routing artifact with lighting evidence already resolved.
  *
  * Everything expensive happens here, once. The browser only ever receives the
  * finished JSON: it never talks to Overpass and never sees a graph too big to
  * parse on a phone.
  *
- *   node scripts/build-data.mjs [--radius 3000] [--no-assume-hours]
+ *   node scripts/build-data.mjs --region huddersfield [--radius 3000] [--tiles 3] [--no-assume-hours]
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const CENTRE = { lat: 53.6458, lon: -1.785 };
-const RADIUS = Number(argOf("--radius") ?? 1600);
+const REGIONS = JSON.parse(await fs.readFile(path.join(process.cwd(), "config", "regions.json"), "utf8"));
+const REGION = REGIONS.find((r) => r.id === (argOf("--region") ?? REGIONS[0].id));
+if (!REGION) {
+  console.error(`Unknown --region. Known: ${REGIONS.map((r) => r.id).join(", ")}`);
+  process.exit(1);
+}
+const CENTRE = { lat: REGION.centre[0], lon: REGION.centre[1] };
+const RADIUS = Number(argOf("--radius") ?? REGION.radiusM);
 const ASSUME_HOURS = !process.argv.includes("--no-assume-hours");
 
-const OUT_DIR = path.join(process.cwd(), "public", "data");
+const TIER1_KINDS = new Set([
+  "pub", "bar", "nightclub", "hotel", "hostel", "guest_house", "station",
+  "police", "hospital", "casino", "cinema", "bus_station", "theatre",
+]);
+
+/**
+ * Typical UK hours for venues with no opening_hours tag. Deliberately
+ * conservative; every venue using one is flagged `assumed` in the app.
+ */
+const TYPICAL_HOURS = {
+  pub: "Mo-Th 12:00-23:00; Fr-Sa 12:00-24:00; Su 12:00-22:30",
+  bar: "Mo-Th 16:00-23:00; Fr-Sa 16:00-02:00; Su 16:00-22:30",
+  nightclub: "Th-Sa 22:00-03:00",
+  hotel: "24/7",
+  hostel: "24/7",
+  guest_house: "Mo-Su 08:00-22:00",
+  station: "Mo-Sa 05:30-00:30; Su 07:30-00:00",
+  bus_station: "Mo-Sa 06:00-23:00; Su 08:00-22:00",
+  police: "Mo-Su 08:00-20:00",
+  hospital: "24/7",
+  fuel: "Mo-Su 06:00-23:00",
+  supermarket: "Mo-Sa 07:00-22:00; Su 10:00-16:00",
+  convenience: "Mo-Su 07:00-23:00",
+  alcohol: "Mo-Su 10:00-23:00",
+  newsagent: "Mo-Su 06:00-21:00",
+  kiosk: "Mo-Su 07:00-22:00",
+  fast_food: "Mo-Su 11:00-23:00",
+  restaurant: "Mo-Su 12:00-22:00",
+  cafe: "Mo-Sa 08:00-17:00",
+  pharmacy: "Mo-Sa 09:00-18:00",
+  chemist: "Mo-Sa 09:00-18:00",
+  cinema: "Mo-Su 11:00-23:30",
+  casino: "Mo-Su 12:00-04:00",
+  theatre: "Mo-Sa 18:00-23:00",
+};
+
+const OUT_DIR = path.join(process.cwd(), "public", "data", REGION.id);
 
 const ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
@@ -74,8 +116,17 @@ const MAJOR_HIGHWAYS = new Set([
 ]);
 
 const LIGHT = { TAGGED_YES: 0, LAMP_NEAR: 1, CLASS_PRIOR: 2, UNKNOWN: 3, TAGGED_NO: 4 };
-const FLAG_PARK = 1;
-const FLAG_PATH = 2;
+// Edge flags (bit field) — mirrored in lib/graph.ts
+const FLAG_PARK = 1; // inside a park / open space polygon
+const FLAG_PATH = 2; // footway, path, cycleway, steps, track
+const FLAG_MAJOR = 4; // primary/secondary/tertiary/trunk: traffic, lighting, passers-by
+const FLAG_ALLEY = 8; // service=alley / narrow passage ("snicket")
+const FLAG_STEPS = 16;
+const FLAG_TUNNEL = 32; // underpass, subway, covered passage
+const FLAG_CCTV = 64; // mapped surveillance camera within 40 m
+const FLAG_TRACK = 128; // track / bridleway: unsurfaced, rural, isolated
+const FLAG_SERVICE = 256; // service roads: car parks, yards, backs of buildings
+const FLAG_BUSY = 512; // pedestrian high street or bus stop within 40 m: footfall
 
 // ---------------------------------------------------------------- helpers
 
@@ -108,7 +159,7 @@ function distanceM(aLat, aLon, bLat, bLon) {
 
 async function overpass(query, label, timeoutMs = 120000) {
   let lastErr;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 7; attempt++) {
     const endpoint = ENDPOINTS[attempt % ENDPOINTS.length];
     const started = Date.now();
     try {
@@ -148,7 +199,7 @@ const CACHE_DIR = path.join(process.cwd(), ".cache");
 /** Overpass layers are cached to disk so a retry never refetches 41k ways. */
 async function cached(key, run) {
   await fs.mkdir(CACHE_DIR, { recursive: true });
-  const file = path.join(CACHE_DIR, `${key}.json`);
+  const file = path.join(CACHE_DIR, `${REGION.id}-${key}-r${RADIUS}.json`);
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8"));
     if (Array.isArray(parsed.elements) && parsed.elements.length > 0) {
@@ -294,23 +345,38 @@ function makeGrid(cellDeg) {
 async function main() {
   const box = bbox();
   console.log(
-    `SafeStride data build · radius ${RADIUS}m · bbox ${box.s.toFixed(4)},${box.w.toFixed(4)},${box.n.toFixed(4)},${box.e.toFixed(4)}`
+    `SafeStride data build · ${REGION.name} · radius ${RADIUS}m · bbox ${box.s.toFixed(4)},${box.w.toFixed(4)},${box.n.toFixed(4)},${box.e.toFixed(4)}`
   );
   const span = `${box.s},${box.w},${box.n},${box.e}`;
 
-  // 1. streets
-  console.log("\n[1/4] walkable streets");
-  const streetQuery = `[out:json][timeout:180];
+  // 1. streets — fetched in tiles so busy public Overpass servers can cope
+  console.log("\n[1/5] walkable streets");
+  const TILES = Number(argOf("--tiles") ?? 3);
+  const streetById = new Map();
+  for (let ty = 0; ty < TILES; ty++) {
+    for (let tx = 0; tx < TILES; tx++) {
+      const s = box.s + ((box.n - box.s) * ty) / TILES;
+      const n = box.s + ((box.n - box.s) * (ty + 1)) / TILES;
+      const w = box.w + ((box.e - box.w) * tx) / TILES;
+      const e = box.w + ((box.e - box.w) * (tx + 1)) / TILES;
+      const q = `[out:json][timeout:120];
 (
-  way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|unclassified|service|primary|secondary|tertiary|trunk|cycleway|track|bridleway|primary_link|secondary_link|tertiary_link)$"](${span});
+  way["highway"~"^(footway|path|pedestrian|steps|residential|living_street|unclassified|service|primary|secondary|tertiary|trunk|cycleway|track|bridleway|primary_link|secondary_link|tertiary_link)$"](${s},${w},${n},${e});
 );
 out body;
 >;
 out skel qt;`;
-  const streetEls = await cached("streets", () => overpass(streetQuery, "streets", 150000));
+      const els = await cached(`streets-${TILES}x${TILES}-${ty}-${tx}`, () =>
+        overpass(q, `streets tile ${ty * TILES + tx + 1}/${TILES * TILES}`, 120000)
+      );
+      for (const el of els) streetById.set(`${el.type}/${el.id}`, el);
+    }
+  }
+  const streetEls = [...streetById.values()];
+  console.log(`  ${streetEls.length} street elements after merging tiles`);
 
   // 2. parks
-  console.log("\n[2/4] parks & open space");
+  console.log("\n[2/5] parks & open space");
   const parkQuery = `[out:json][timeout:120];
 (
   way["leisure"~"^(park|common|garden|recreation_ground)$"](${span});
@@ -322,7 +388,7 @@ out geom;`;
   });
 
   // 3. street lamps
-  console.log("\n[3/4] street lamps");
+  console.log("\n[3/5] street lamps");
   const lampQuery = `[out:json][timeout:180];
 node["highway"="street_lamp"](${span});
 out body;`;
@@ -331,15 +397,37 @@ out body;`;
     return [];
   });
 
-  // 4. venues
-  console.log("\n[4/4] late-night venues");
+  // 4. footfall & surveillance signals
+  console.log("\n[4/5] CCTV cameras & bus stops");
+  const signalQuery = `[out:json][timeout:120];
+(
+  node["man_made"="surveillance"](${span});
+  node["highway"="bus_stop"](${span});
+  node["public_transport"="platform"]["bus"="yes"](${span});
+);
+out body;`;
+  const signalEls = await cached("signals", () => overpass(signalQuery, "cctv+bus", 90000)).catch((e) => {
+    console.warn(`  ! cctv/bus stops unavailable (${e.message})`);
+    return [];
+  });
+  const cctvGrid = makeGrid(0.0005);
+  const busGrid = makeGrid(0.0005);
+  for (const el of signalEls) {
+    if (el.type !== "node") continue;
+    if (el.tags?.man_made === "surveillance") cctvGrid.add(el.lat, el.lon, el.id);
+    else busGrid.add(el.lat, el.lon, el.id);
+  }
+
+  // 5. venues
+  console.log("\n[5/5] late-night venues");
   // Split into two lighter queries: one heavy nwr regex over 3km tends to 502.
   const amenityQuery = `[out:json][timeout:180];
-nwr["amenity"~"^(pub|bar|pharmacy|fuel|restaurant|fast_food|cafe|hotel|nightclub)$"](${span});
+nwr["amenity"~"^(pub|bar|pharmacy|fuel|restaurant|fast_food|cafe|nightclub|police|hospital|cinema|casino|bus_station|theatre|community_centre)$"](${span});
 out center tags;`;
   const shopQuery = `[out:json][timeout:180];
 (
-  nwr["shop"~"^(convenience|supermarket|bakery|greengrocer)$"](${span});
+  nwr["shop"~"^(convenience|supermarket|bakery|greengrocer|alcohol|newsagent|chemist|kiosk)$"](${span});
+  nwr["tourism"~"^(hotel|hostel|guest_house)$"](${span});
   nwr["railway"="station"](${span});
 );
 out center tags;`;
@@ -394,27 +482,27 @@ out center tags;`;
     const name = tags.name;
     if (!name) continue;
 
-    const kind =
-      tags.amenity || tags.shop || (tags.railway === "station" ? "station" : "venue");
+    // amenity=hospital etc. without emergency care isn't a walk-in refuge
+    if (tags.amenity === "hospital" && tags.emergency !== "yes") continue;
+    if (tags.disused || tags["disused:amenity"] || tags.access === "private") continue;
 
-    let tier = 2;
-    if (
-      ["pub", "bar", "hotel", "nightclub"].includes(tags.amenity) ||
-      tags.railway === "station"
-    ) {
-      tier = 1;
-    }
+    const kind =
+      tags.amenity ||
+      tags.tourism ||
+      tags.shop ||
+      (tags.railway === "station" ? "station" : "venue");
+
+    // Tier 1: staffed places that run Ask for Angela / can call police or a taxi.
+    let tier = TIER1_KINDS.has(kind) ? 1 : 2;
 
     const rawHours = tags.opening_hours ?? "";
     let masks = parseOpeningHours(rawHours);
     let assumed = false;
 
-    if (!masks && ASSUME_HOURS) {
-      // Labelled as an assumption in the UI, never silently treated as fact.
-      if (tags.amenity === "fuel" || ["supermarket", "convenience"].includes(tags.shop)) {
-        masks = parseOpeningHours("Mo-Su 07:00-23:00");
-        assumed = true;
-      }
+    if (!masks && ASSUME_HOURS && TYPICAL_HOURS[kind]) {
+      // Labelled as an estimate in the UI, never silently treated as fact.
+      masks = parseOpeningHours(TYPICAL_HOURS[kind]);
+      assumed = true;
     }
     if (!masks) continue;
 
@@ -427,7 +515,7 @@ out center tags;`;
       lon: Number(lon.toFixed(6)),
       tier,
       kind,
-      hours: rawHours || (assumed ? "07:00-23:00 (assumed)" : "24/7"),
+      hours: rawHours || (assumed ? `${TYPICAL_HOURS[kind]} (typical, not mapped)` : "24/7"),
       assumed,
       openMask,
     });
@@ -516,7 +604,17 @@ out center tags;`;
 
       let flags = 0;
       if (inPark) flags |= FLAG_PARK;
-      if (PATH_HIGHWAYS.has(highway)) flags |= FLAG_PATH;
+      // pedestrian high streets are streets, not footpaths
+      if (PATH_HIGHWAYS.has(highway) && highway !== "pedestrian") flags |= FLAG_PATH;
+      if (MAJOR_HIGHWAYS.has(highway)) flags |= FLAG_MAJOR;
+      if (tags.service === "alley" || tags.footway === "alley" || /^(narrow|alley|passage)$/.test(tags.footway ?? "")) flags |= FLAG_ALLEY;
+      if (highway === "steps") flags |= FLAG_STEPS;
+      if (tags.tunnel && tags.tunnel !== "no") flags |= FLAG_TUNNEL;
+      if (tags.covered === "yes" && highway !== "pedestrian") flags |= FLAG_TUNNEL;
+      if (highway === "track" || highway === "bridleway") flags |= FLAG_TRACK;
+      if (highway === "service" && tags.service !== "alley") flags |= FLAG_SERVICE;
+      if (cctvGrid.near(midLat, midLon, 40).length > 0) flags |= FLAG_CCTV;
+      if (highway === "pedestrian" || busGrid.near(midLat, midLon, 40).length > 0) flags |= FLAG_BUSY;
 
       // "eyes on the street": which hours does this edge have an open venue near it?
       let openMask = 0;
@@ -558,8 +656,9 @@ out center tags;`;
   ]);
 
   const graph = {
-    version: 1,
-    city: "Huddersfield",
+    version: 2,
+    city: REGION.name,
+    region: REGION.id,
     builtAt: new Date().toISOString(),
     centre: [CENTRE.lat, CENTRE.lon],
     source: "OpenStreetMap via Overpass",

@@ -5,11 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ContactsSetup from "@/components/ContactsSetup";
 import SearchBox from "@/components/SearchBox";
 import SosGuidance, { type SosState } from "@/components/SosGuidance";
+import { accuracyTone, usePreciseLocation } from "@/lib/location";
 import { dayLight, fmtTime, loadData, type DataBundle } from "@/lib/data";
 import { distanceM, pointAlong, polylineLength } from "@/lib/geo";
 import { prepare } from "@/lib/graph";
-import { DEMO_CENTRE, PRESETS } from "@/lib/presets";
-import { computeRoutes, nearestHaven, routeTo } from "@/lib/routing";
+import { DEFAULT_REGION, inRegion, nearestRegion, regionAt, regionById, REGIONS, type Region } from "@/lib/regions";
+import { computeRoutes, INCIDENT_FACTOR, nearestHaven, OPEN_VENUE_FACTOR, routeTo, STREET_FACTORS } from "@/lib/routing";
 import {
   fetchSession,
   loadAlert,
@@ -24,24 +25,30 @@ import {
   type Profile,
   type PublicSession,
 } from "@/lib/tracking";
-import type { RouteResult, Venue } from "@/lib/types";
-import { openUntil, openVenuesNear, tierLabel, venuesAlong } from "@/lib/venues";
+import IncidentDetails from "@/components/IncidentDetails";
+import { CATEGORY_TONE, timeAgo } from "@/lib/incidents";
+import { isMapped, type Incident, type RouteAudit, type RouteResult, type Venue } from "@/lib/types";
+import { kindLabel, openUntil, openVenuesNear, tierLabel, venuesAlong } from "@/lib/venues";
 
 const MapCanvas = dynamic(() => import("@/components/MapCanvas"), {
   ssr: false,
   loading: () => <div className="grid h-full place-items-center text-xs text-zinc-500">loading map…</div>,
 });
 
-// The walk graph's coverage box (scripts/build-data.mjs).
-const BBOX = { s: 53.6188, w: -1.8305, n: 53.6728, e: -1.7395 };
-const inCoverage = (lat: number, lon: number) => lat >= BBOX.s && lat <= BBOX.n && lon >= BBOX.w && lon <= BBOX.e;
+const REGION_KEY = "safestride:region";
+function savedRegion(): Region {
+  try {
+    return regionById(localStorage.getItem(REGION_KEY)) ?? DEFAULT_REGION;
+  } catch {
+    return DEFAULT_REGION;
+  }
+}
 
 const STREAM_MS = 5000;
 const DEMO_STEP_M = 25; // demo walk speed per 5 s tick (≈ brisk walk, sped up for stage demos)
 
 type Tab = "audit" | "havens" | "track" | "network";
 type Place = { lat: number; lon: number; name: string };
-type Gps = { status: "idle" | "locating" | "ok" | "outside" | "denied" | "unsupported"; fix: Place | null };
 type Haven = { venue: Venue; metres: number; coords: [number, number][] };
 
 function initialHour(): number {
@@ -53,20 +60,22 @@ function initialHour(): number {
 }
 
 export default function Page() {
-  const [bundle, setBundle] = useState<DataBundle | null>(null);
+  // Which town's map is loaded. Each region has its own data in public/data/<id>/.
+  const [region, setRegionState] = useState<Region>(DEFAULT_REGION);
+  const [bundle, setBundle] = useState<(DataBundle & { regionId: string }) | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [tab, setTab] = useState<Tab>("audit");
   const [skipSetup, setSkipSetup] = useState(false);
 
-  const [presetId, setPresetId] = useState<string | null>(PRESETS[0].id);
-  const [origin, setOrigin] = useState<Place>(PRESETS[0].from);
-  const [destination, setDestination] = useState<Place>(PRESETS[0].to);
-  const [gps, setGps] = useState<Gps>({ status: "idle", fix: null });
+  const [presetId, setPresetId] = useState<string | null>(DEFAULT_REGION.presets[0].id);
+  const [origin, setOrigin] = useState<Place>(DEFAULT_REGION.presets[0].from);
+  const [destination, setDestination] = useState<Place>(DEFAULT_REGION.presets[0].to);
   const [hour, setHour] = useState(23.5);
   const [selected, setSelected] = useState<"safe" | "fastest">("safe");
   const [walkMetres, setWalkMetres] = useState(0);
+  const [pickMode, setPickMode] = useState<"start" | "destination">("destination");
   const [toast, setToast] = useState<string | null>(null);
 
   const [haven, setHaven] = useState<Haven | null>(null);
@@ -88,51 +97,91 @@ export default function Page() {
     setProfile(loadProfile());
     setAlert(loadAlert());
     setProfileLoaded(true);
-    loadData()
-      .then(setBundle)
-      .catch((err) => setLoadError(err.message));
-  }, []);
-
-  const graph = useMemo(() => (bundle ? prepare(bundle.graph) : null), [bundle]);
-  const hourInt = ((Math.floor(hour) % 24) + 24) % 24;
-  const light = useMemo(() => dayLight(DEMO_CENTRE.lat, DEMO_CENTRE.lon, hour), [hour]);
-
-  // ---------- GPS ----------
-  const locate = useCallback((quiet = false) => {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setGps({ status: "unsupported", fix: null });
-      return;
-    }
-    setGps((g) => ({ ...g, status: "locating" }));
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const fix = { lat: pos.coords.latitude, lon: pos.coords.longitude, name: "Your location" };
-        gpsFixRef.current = fix;
-        if (inCoverage(fix.lat, fix.lon)) {
-          setGps({ status: "ok", fix });
-          setOrigin(fix);
-          setPresetId(null);
-        } else {
-          setGps({ status: "outside", fix });
-          if (!quiet) setToast("You're outside the Huddersfield coverage area — using the demo start point.");
-        }
-      },
-      () => setGps({ status: "denied", fix: null }),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
-    );
+    const r = savedRegion();
+    if (r.id !== DEFAULT_REGION.id) switchRegion(r, { keepOrigin: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    locate(true);
-  }, [locate]);
+    let live = true;
+    setLoadError(null);
+    loadData(region)
+      .then((d) => live && setBundle({ ...d, regionId: region.id }))
+      .catch((err) => live && setLoadError(`${region.name}: ${err.message}`));
+    return () => {
+      live = false;
+    };
+  }, [region]);
+
+  /** Switch town: reload its map, reset to its first demo route (or keep a GPS start inside it). */
+  const switchRegion = useCallback((r: Region, opts: { keepOrigin: boolean; origin?: Place } = { keepOrigin: false }) => {
+    setRegionState(r);
+    setBundle((b) => (b && b.regionId === r.id ? b : null));
+    try {
+      localStorage.setItem(REGION_KEY, r.id);
+    } catch {
+      // storage blocked — region just won't be remembered
+    }
+    const p = r.presets[0];
+    setOrigin(opts.origin ?? p.from);
+    setDestination(p.to);
+    setPresetId(opts.origin ? null : p.id);
+    setWalkMetres(0);
+    firedRef.current.clear();
+  }, []);
+
+  // only use a bundle that belongs to the selected region
+  const current = bundle && bundle.regionId === region.id ? bundle : null;
+  const graph = useMemo(() => (current ? prepare(current.graph) : null), [current]);
+  const hourInt = ((Math.floor(hour) % 24) + 24) % 24;
+  const light = useMemo(() => dayLight(region.centre[0], region.centre[1], hour), [hour, region]);
+
+  // ---------- GPS ----------
+  const loc = usePreciseLocation();
+  const { start: startLocating } = loc;
+  // "gps": the start follows your location; "manual": you picked it, GPS leaves it alone
+  const [originSource, setOriginSource] = useState<"gps" | "manual">("gps");
+
+  useEffect(() => {
+    startLocating();
+  }, [startLocating]);
+
+  useEffect(() => {
+    const f = loc.fix;
+    if (!f) return;
+    gpsFixRef.current = { lat: f.lat, lon: f.lon };
+    if (originSource !== "gps") return;
+    const here = { lat: f.lat, lon: f.lon, name: loc.label ?? "Your location" };
+    if (inRegion(region, f.lat, f.lon)) {
+      setOrigin(here);
+      setPresetId(null);
+      return;
+    }
+    // you're in a different covered town: switch to it automatically
+    const other = regionAt(f.lat, f.lon);
+    if (other && !alert) {
+      switchRegion(other, { keepOrigin: true, origin: here });
+      setToast(`You're in ${other.name} — switched the map to ${other.name}.`);
+    }
+  }, [loc.fix, loc.label, originSource, region, switchRegion, alert]);
+
+  const gpsOutside = Boolean(loc.fix && !regionAt(loc.fix.lat, loc.fix.lon));
+  const gpsInUse = originSource === "gps" && Boolean(loc.fix) && !gpsOutside;
+  const setManualOrigin = (p: Place) => {
+    setOrigin(p);
+    setOriginSource("manual");
+    setPresetId(null);
+    setWalkMetres(0);
+    firedRef.current.clear();
+  };
 
   // ---------- routing ----------
   const routes = useMemo(() => {
-    if (!graph || !bundle) return null;
+    if (!graph || !current) return null;
     return computeRoutes({
       graph,
-      venues: bundle.venues,
-      incidents: bundle.incidents,
+      venues: current.venues,
+      incidents: current.incidents,
       origin,
       destination,
       hour,
@@ -140,22 +189,22 @@ export default function Page() {
       sunset: fmtTime(light.sunset),
       sunrise: fmtTime(light.sunrise),
     });
-  }, [graph, bundle, origin, destination, hour, light]);
+  }, [graph, current, origin, destination, hour, light]);
 
   const ok = routes && !("error" in routes) ? routes : null;
   const routeError = routes && "error" in routes ? routes.error : null;
 
   const openVenues = useMemo(
-    () => (bundle ? bundle.venues.filter((v) => ((v.openMask >> hourInt) & 1) === 1) : []),
-    [bundle, hourInt]
+    () => (current ? current.venues.filter((v) => ((v.openMask >> hourInt) & 1) === 1) : []),
+    [current, hourInt]
   );
 
   const labelled = useMemo(() => {
-    if (!bundle || !ok) return [];
-    return venuesAlong(bundle.venues, ok.safe.coords, origin, hourInt)
+    if (!current || !ok) return [];
+    return venuesAlong(current.venues, ok.safe.coords, origin, hourInt)
       .slice(0, 3)
-      .map((x) => ({ ...x, note: `${openUntil(x.venue, hourInt)} · ${x.venue.tier === 1 ? "staffed" : x.venue.kind.replace(/_/g, " ")}` }));
-  }, [bundle, ok, origin, hourInt]);
+      .map((x) => ({ ...x, note: `${openUntil(x.venue, hourInt)} · ${kindLabel(x.venue)}${x.venue.assumed ? " (est.)" : ""}` }));
+  }, [current, ok, origin, hourInt]);
 
   const chosen: RouteResult | null = ok ? (selected === "safe" ? ok.safe : ok.fastest) : null;
   const walkLength = chosen ? polylineLength(chosen.coords) : 0;
@@ -208,14 +257,14 @@ export default function Page() {
   /** Where SOS should start from: real GPS when it's inside coverage, else the current origin. */
   const sosStart = useCallback((): { lat: number; lon: number } => {
     const g = gpsFixRef.current;
-    if (g && inCoverage(g.lat, g.lon)) return g;
+    if (g && inRegion(region, g.lat, g.lon)) return g;
     return { lat: origin.lat, lon: origin.lon };
-  }, [origin]);
+  }, [origin, region]);
 
   const findHaven = useCallback(
     (from: { lat: number; lon: number }): Haven | null => {
-      if (!graph || !bundle) return null;
-      const found = nearestHaven(bundle.venues, from, hourInt);
+      if (!graph || !current) return null;
+      const found = nearestHaven(current.venues, from, hourInt);
       if (!found) return null;
       const path = routeTo(graph, from, { lat: found.venue.lat, lon: found.venue.lon });
       const coords: [number, number][] = path?.coords.length
@@ -223,7 +272,7 @@ export default function Page() {
         : [[from.lat, from.lon], [found.venue.lat, found.venue.lon]];
       return { venue: found.venue, metres: path?.metres ?? found.metres, coords };
     },
-    [graph, bundle, hourInt]
+    [graph, current, hourInt]
   );
 
   const sendAlert = useCallback(
@@ -269,7 +318,7 @@ export default function Page() {
 
   // restore an alert that was active before a reload
   useEffect(() => {
-    if (!alert || haven || !graph || !bundle) return;
+    if (!alert || haven || !graph || !current) return;
     fetchSession(alert.id).then(({ status, body }) => {
       if (status !== 200 || body.status !== "active") {
         saveAlert(null);
@@ -279,7 +328,7 @@ export default function Page() {
       const from = body.last ?? { lat: origin.lat, lon: origin.lon };
       const path = routeTo(graph, from, alert.target);
       setHaven({
-        venue: bundle.venues.find((v) => v.name === alert.target.name) ?? {
+        venue: current.venues.find((v) => v.name === alert.target.name) ?? {
           name: alert.target.name,
           lat: alert.target.lat,
           lon: alert.target.lon,
@@ -295,7 +344,7 @@ export default function Page() {
       setSosState({ phase: "active", alert });
       startWatch();
     });
-  }, [alert, haven, graph, bundle, origin, startWatch]);
+  }, [alert, haven, graph, current, origin, startWatch]);
 
   // stream position every 5 s while an alert is active
   useEffect(() => {
@@ -351,11 +400,19 @@ export default function Page() {
       <Shell>
         <div className="grid min-h-[60vh] place-items-center p-8 text-center">
           <div className="max-w-sm space-y-2">
-            <h1 className="text-lg font-semibold">No walk network loaded</h1>
+            <h1 className="text-lg font-semibold">{region.name} map not built yet</h1>
             <p className="text-sm text-zinc-400">{loadError}</p>
             <p className="text-xs text-zinc-500">
-              Run <code className="text-safe">npm run data:graph</code>, then reload.
+              Run <code className="text-safe">npm run data:graph -- --region {region.id}</code> and{" "}
+              <code className="text-safe">npm run data:news -- --region {region.id}</code>, then reload.
             </p>
+            <div className="flex flex-wrap justify-center gap-2 pt-2">
+              {REGIONS.filter((r) => r.id !== region.id).map((r) => (
+                <button key={r.id} onClick={() => switchRegion(r)} className="border border-edge px-3 py-2 text-sm font-semibold text-safe">
+                  Open {r.name}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </Shell>
@@ -365,7 +422,7 @@ export default function Page() {
   if (profileLoaded && !profile && !skipSetup) {
     return (
       <Shell>
-        <Header />
+        <Header region={region} />
         <div className="p-5">
           <ContactsSetup
             onboarding
@@ -384,10 +441,10 @@ export default function Page() {
     );
   }
 
-  if (!bundle || !ok) {
+  if (!current || !ok) {
     return (
       <Shell>
-        <Header />
+        <Header region={region} />
         <div className="grid min-h-[60vh] place-items-center text-center">
           <div className="space-y-2">
             <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-edge border-t-safe" />
@@ -396,8 +453,8 @@ export default function Page() {
               <button
                 className="text-xs font-semibold text-safe"
                 onClick={() => {
-                  setOrigin(PRESETS[0].from);
-                  setDestination(PRESETS[0].to);
+                  setOrigin(region.presets[0].from);
+                  setDestination(region.presets[0].to);
                 }}
               >
                 Reset to demo route
@@ -417,16 +474,35 @@ export default function Page() {
 
   return (
     <Shell>
-      <Header />
+      <Header region={region} />
 
       {tab === "audit" && (
         <>
           {/* status row */}
           <div className="grid grid-cols-2 border-b border-edge">
             <div className="min-w-0 border-r border-edge p-3">
-              <p className="flex items-center gap-2 text-[15px] font-bold">
-                <span className="h-2.5 w-2.5 rounded-full bg-safe" /> Huddersfield
-              </p>
+              <label className="flex items-center gap-2 text-[15px] font-bold">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-safe" />
+                <select
+                  value={region.id}
+                  disabled={Boolean(alert)}
+                  onChange={(e) => {
+                    const r = regionById(e.target.value);
+                    if (!r) return;
+                    setOriginSource("manual");
+                    switchRegion(r);
+                  }}
+                  aria-label="Town / map area"
+                  className="min-w-0 flex-1 cursor-pointer appearance-none bg-transparent font-bold text-zinc-100 focus:outline-none"
+                >
+                  {REGIONS.map((r) => (
+                    <option key={r.id} value={r.id} className="bg-ink">
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[11px] text-zinc-500" aria-hidden>▾</span>
+              </label>
               <button
                 onClick={() => setTab("network")}
                 className="mt-2 flex w-full items-center gap-2 border border-edge bg-ink px-2.5 py-2 text-left"
@@ -479,19 +555,25 @@ export default function Page() {
           <div className="flex items-center gap-3 border-b border-edge px-4 py-3">
             <Badge letter="A" />
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] text-zinc-500">Origin</p>
-              <p className="truncate text-[16px] font-medium">{origin.name}</p>
+              <p className="text-[12px] text-zinc-500">Start</p>
+              <SearchBox
+                venues={current.venues}
+                region={region}
+                placeholder={origin.name}
+                ariaLabel="Search start location"
+                className="w-full bg-transparent py-0.5 text-[16px] font-medium text-zinc-100 placeholder:text-zinc-100 focus:placeholder:text-zinc-500 focus:outline-none"
+                onSelect={(p) => setManualOrigin({ lat: p.lat, lon: p.lon, name: p.name })}
+              />
+              <GpsStatus loc={loc} inUse={gpsInUse} outside={gpsOutside} manual={originSource === "manual"} region={region} />
             </div>
             <button
               onClick={() => {
-                if (gps.status === "ok" && gps.fix) {
-                  setOrigin(gps.fix);
-                  setPresetId(null);
-                } else locate();
+                setOriginSource("gps");
+                startLocating();
               }}
-              className="shrink-0 border border-edge px-2 py-1.5 text-[11px] font-semibold text-safe"
+              className={`shrink-0 border px-2 py-1.5 text-[11px] font-semibold ${gpsInUse ? "border-safe/60 text-safe" : "border-edge text-zinc-300"}`}
             >
-              {gps.status === "locating" ? "Locating…" : "◎ My location"}
+              {loc.status === "locating" ? "Locating…" : "◎ My location"}
             </button>
           </div>
 
@@ -501,7 +583,8 @@ export default function Page() {
             <div className="min-w-0 flex-1">
               <p className="text-[12px] text-zinc-500">Destination</p>
               <SearchBox
-                venues={bundle.venues}
+                venues={current.venues}
+                region={region}
                 placeholder={destination.name}
                 className="w-full bg-transparent py-0.5 text-[16px] font-medium text-zinc-100 placeholder:text-zinc-100 focus:placeholder:text-zinc-500 focus:outline-none"
                 onSelect={(p) => {
@@ -517,12 +600,13 @@ export default function Page() {
 
           <div className="flex gap-1.5 overflow-x-auto border-b border-edge px-4 py-2">
             <span className="shrink-0 self-center text-[10px] uppercase tracking-wider text-zinc-500">Demo</span>
-            {PRESETS.map((p) => (
+            {region.presets.map((p) => (
               <button
                 key={p.id}
                 onClick={() => {
                   setPresetId(p.id);
                   setOrigin(p.from);
+                  setOriginSource("manual");
                   setDestination(p.to);
                   setWalkMetres(0);
                   firedRef.current.clear();
@@ -539,22 +623,40 @@ export default function Page() {
           {/* map */}
           <div className="relative h-[360px] border-b border-edge">
             <MapCanvas
-              centre={[DEMO_CENTRE.lat, DEMO_CENTRE.lon]}
+              centre={region.centre}
               fastest={ok.fastest}
               safe={ok.sameRoute ? null : ok.safe}
               selected={selected}
               venues={openVenues}
               labelled={labelled}
-              incidents={bundle.incidents}
+              incidents={current.incidents}
               origin={[origin.lat, origin.lon]}
               destination={[destination.lat, destination.lon]}
               walk={walkPoint}
               onPick={(lat, lon) => {
-                setDestination({ lat, lon, name: "Dropped pin" });
+                if (pickMode === "start") {
+                  setManualOrigin({ lat, lon, name: "Pinned start" });
+                  return;
+                }
+                setDestination({ lat, lon, name: "Pinned destination" });
                 setPresetId(null);
                 setWalkMetres(0);
+                firedRef.current.clear();
               }}
+              accuracy={gpsInUse && loc.fix ? { centre: [loc.fix.lat, loc.fix.lon], metres: loc.fix.accuracy } : null}
             />
+            <div className="absolute bottom-3 left-3 z-[1000] flex items-center border border-edge bg-ink/90 text-[11px]">
+              <span className="px-2 text-zinc-500">Tap map to set</span>
+              {(["start", "destination"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setPickMode(m)}
+                  className={`px-2.5 py-1.5 font-semibold ${pickMode === m ? (m === "start" ? "bg-zinc-100 text-ink" : "bg-alarm text-white") : "text-zinc-400"}`}
+                >
+                  {m === "start" ? "A · Start" : "B · Destination"}
+                </button>
+              ))}
+            </div>
             {toast && (
               <div className="pointer-events-none absolute inset-x-3 top-3 z-[1000] border border-safe/50 bg-ink/95 px-3 py-2 text-[12px] text-safe">
                 {toast}
@@ -602,14 +704,18 @@ export default function Page() {
                 ? `After dark: ${Math.round(ok.safe.audit.litShare * 100)}% of the recommended route is confirmed lit, ${Math.round(ok.safe.audit.inferredShare * 100)}% inferred from road type, ${Math.round(ok.safe.audit.unknownShare * 100)}% has no lighting data.`
                 : `Daylight — lighting doesn't affect routing until sunset at ${fmtTime(light.sunset)}.`}
             </p>
+            {!ok.sameRoute && <RouteReasons safe={ok.safe.audit} fast={ok.fastest.audit} isDark={light.isDark} />}
+            <ScoringExplainer isDark={light.isDark} />
             <WalkScrubber length={walkLength} metres={walkMetres} onChange={setWalkMetres} minutes={chosen?.audit.minutes ?? 0} />
           </div>
+
+          <NewsAlerts incidents={current.incidents} route={chosen?.coords ?? []} />
         </>
       )}
 
       {tab === "havens" && (
         <HavensList
-          venues={bundle.venues}
+          venues={current.venues}
           from={origin}
           hour={hourInt}
           onRoute={(v) => {
@@ -690,13 +796,13 @@ function Shell({ children }: { children: React.ReactNode }) {
   return <main className="mx-auto min-h-[var(--app-h)] max-w-md border-x border-edge bg-panel pb-[76px]">{children}</main>;
 }
 
-function Header() {
+function Header({ region }: { region: Region }) {
   return (
     <header className="flex items-center gap-3 border-b border-edge bg-ink px-4 pb-3 pt-[max(env(safe-area-inset-top),14px)]">
       <span className="h-4 w-4 shrink-0 bg-alarm" />
       <div>
         <p className="text-[13px] font-medium text-zinc-300">SafeStride</p>
-        <h1 className="text-[21px] font-bold leading-tight tracking-tight">Huddersfield Route Audit</h1>
+        <h1 className="text-[21px] font-bold leading-tight tracking-tight">{region.name} Route Audit</h1>
       </div>
     </header>
   );
@@ -795,6 +901,191 @@ function WalkScrubber({ length, metres, onChange, minutes }: { length: number; m
         aria-label="Walk progress"
       />
     </div>
+  );
+}
+
+function GpsStatus({
+  loc,
+  inUse,
+  outside,
+  manual,
+  region,
+}: {
+  loc: ReturnType<typeof usePreciseLocation>;
+  inUse: boolean;
+  outside: boolean;
+  manual: boolean;
+  region: Region;
+}) {
+  let text: React.ReactNode;
+  if (manual) text = <span className="text-zinc-500">Set by you · tap ◎ to use your location</span>;
+  else if (loc.status === "insecure")
+    text = <span className="text-amber-300">Location needs https:// — open the deployed link, or set your start by search / tapping the map</span>;
+  else if (loc.status === "denied")
+    text = <span className="text-amber-300">Location blocked — allow it in browser settings, or set your start by search / tapping the map</span>;
+  else if (loc.status === "unsupported" || (loc.status === "unavailable" && !loc.fix))
+    text = <span className="text-amber-300">No location from this device — set your start by search or tapping the map</span>;
+  else if (!loc.fix) text = <span className="text-zinc-400">Locating you… showing the demo start meanwhile</span>;
+  else if (outside) {
+    const near = nearestRegion(loc.fix.lat, loc.fix.lon);
+    text = (
+      <span className="text-amber-300">
+        Your area isn&apos;t mapped yet — nearest covered town is {near.region.name} ({Math.round(near.km)} km). Showing{" "}
+        {region.name}&apos;s demo start.
+      </span>
+    );
+  }
+  else {
+    const tone = accuracyTone(loc.fix.accuracy);
+    text = (
+      <span className={tone.cls}>
+        {tone.text}
+        {loc.status === "locating" ? " · refining…" : ""}
+        {!tone.precise && " · this device is estimating from Wi-Fi/network — tap the map (A · Start) to pin your exact spot"}
+      </span>
+    );
+  }
+  void inUse;
+  return <p className="mt-0.5 text-[11px] leading-snug">{text}</p>;
+}
+
+function RouteReasons({ safe, fast, isDark }: { safe: RouteAudit; fast: RouteAudit; isDark: boolean }) {
+  const pct = (x: number) => Math.round(x * 100);
+  const reasons: { good: boolean; text: string }[] = [];
+  const avoid = (label: string, a: number, b: number) => {
+    if (a - b >= 15) reasons.push({ good: true, text: `Avoids ${a - b} m of ${label}` });
+    else if (b - a >= 15) reasons.push({ good: false, text: `Uses ${b - a} m more ${label}` });
+  };
+
+  if (fast.incidentsOnPath > safe.incidentsOnPath)
+    reasons.push({ good: true, text: `Detours around ${fast.incidentsOnPath - safe.incidentsOnPath} recent news incident${fast.incidentsOnPath - safe.incidentsOnPath > 1 ? "s" : ""}` });
+  const litS = pct(safe.litShare + safe.inferredShare);
+  const litF = pct(fast.litShare + fast.inferredShare);
+  if (isDark && litS - litF >= 5) reasons.push({ good: true, text: `${litS}% lit vs ${litF}% on the shortest route` });
+  if (pct(safe.mainRoadShare) - pct(fast.mainRoadShare) >= 10)
+    reasons.push({ good: true, text: `${pct(safe.mainRoadShare)}% on main roads vs ${pct(fast.mainRoadShare)}%` });
+  avoid("unlit park paths", fast.parkMetres, safe.parkMetres);
+  avoid("alleyways / snickets", fast.alleyMetres, safe.alleyMetres);
+  avoid("underpasses", fast.underpassMetres, safe.underpassMetres);
+  avoid("rural tracks", fast.trackMetres, safe.trackMetres);
+  avoid("service roads & car parks", fast.serviceMetres, safe.serviceMetres);
+  avoid("footpaths away from roads", fast.footpathMetres, safe.footpathMetres);
+  if (safe.openVenues > fast.openVenues)
+    reasons.push({ good: true, text: `Passes ${safe.openVenues - fast.openVenues} more open venue${safe.openVenues - fast.openVenues > 1 ? "s" : ""} (eyes on the street)` });
+  if (safe.busyShare - fast.busyShare >= 0.1)
+    reasons.push({ good: true, text: `More of it on high streets and bus routes (${pct(safe.busyShare)}% vs ${pct(fast.busyShare)}%)` });
+  if (safe.cctvMetres - fast.cctvMetres >= 30) reasons.push({ good: true, text: `${safe.cctvMetres - fast.cctvMetres} m more near mapped CCTV` });
+
+  return (
+    <div className="border border-safe/30 bg-safe/5 p-3">
+      <p className="text-[12px] font-bold uppercase tracking-wider text-safe">Why the recommended route</p>
+      {reasons.length === 0 ? (
+        <p className="mt-1 text-[12px] text-zinc-400">The routes differ only slightly on these safety indicators.</p>
+      ) : (
+        <ul className="mt-1.5 space-y-1 text-[12px]">
+          {reasons.map((r, i) => (
+            <li key={i} className="flex gap-2">
+              <span className={r.good ? "text-safe" : "text-amber-400"}>{r.good ? "✓" : "!"}</span>
+              <span className="text-zinc-200">{r.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ScoringExplainer({ isDark }: { isDark: boolean }) {
+  const k = isDark ? STREET_FACTORS.dark : STREET_FACTORS.day;
+  const rows: [string, string][] = isDark
+    ? [
+        ["Mapped unlit, or a footpath through a park", "×3.5 cost"],
+        ["No lighting data (footpath / street)", "×2.8 / ×1.9"],
+        ["Underpass or covered passage", `×${k.tunnel}`],
+        ["Rural track or bridleway", `×${k.track}`],
+        ["Alleyway / snicket", `×${k.alley}`],
+        ["Service road, car park, yard", `×${k.service}`],
+        ["Steps", `×${k.steps}`],
+        ["Within 100 m of a recent news incident", `×${INCIDENT_FACTOR}`],
+        ["Main road (likely lit, traffic, passers-by)", `×${(0.85 * k.major).toFixed(2)}`],
+        ["Open venue within 50 m right now", `×${OPEN_VENUE_FACTOR}`],
+        ["Pedestrian high street or bus stop", `×${k.busy}`],
+        ["Mapped CCTV within 40 m", `×${k.cctv}`],
+      ]
+    : [
+        ["Underpass or covered passage", `×${k.tunnel}`],
+        ["Rural track or bridleway", `×${k.track}`],
+        ["Alleyway / snicket", `×${k.alley}`],
+        ["Within 100 m of a recent news incident", `×${INCIDENT_FACTOR}`],
+      ];
+  return (
+    <details className="border border-edge bg-ink/60 p-3 text-[12px]">
+      <summary className="cursor-pointer font-semibold text-zinc-300">How routes are scored {isDark ? "after dark" : "in daylight"}</summary>
+      <p className="mt-2 text-[11px] text-zinc-500">
+        Each street&apos;s length is multiplied by these factors; the recommended route has the lowest total. Lower than ×1
+        means preferred. Street data from OpenStreetMap: lighting tags and mapped lamps, road type, CCTV, bus stops, parks.
+      </p>
+      <dl className="mt-2 space-y-1">
+        {rows.map(([label, v]) => (
+          <div key={label} className="flex justify-between gap-3">
+            <dt className="text-zinc-400">{label}</dt>
+            <dd className={`shrink-0 tabular-nums ${v.startsWith("×0") ? "text-safe" : "text-amber-300"}`}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+function NewsAlerts({ incidents, route }: { incidents: Incident[]; route: [number, number][] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const sorted = [...incidents].sort(
+    (a, b) => Date.parse(b.firstReportedAt ?? b.publishedAt) - Date.parse(a.firstReportedAt ?? a.publishedAt)
+  );
+  const nearRoute = (inc: Incident) =>
+    isMapped(inc) && route.some((c, i) => i % 2 === 0 && distanceM(c[0], c[1], inc.lat, inc.lon) <= 100);
+
+  return (
+    <section className="border-t border-edge px-4 py-4">
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-[15px] font-bold">Local news alerts</h2>
+        <span className="text-[11px] text-zinc-500">last 7 days · {sorted.length}</span>
+      </div>
+      <p className="mt-0.5 text-[11px] text-zinc-500">
+        From BBC, ExaminerLive and other UK outlets. Pinned alerts push routes 100 m away; alerts with no exact place are
+        listed only.
+      </p>
+      {sorted.length === 0 && <p className="mt-3 text-[12px] text-zinc-400">No safety-related local reports in the last 7 days.</p>}
+      <ul className="mt-3 space-y-2">
+        {sorted.map((inc, i) => {
+          const key = inc.id ?? String(i);
+          const expanded = open === key;
+          const near = nearRoute(inc);
+          return (
+            <li key={key} className={`border ${near ? "border-amber-400/60" : "border-edge"} bg-ink/60`}>
+              <button onClick={() => setOpen(expanded ? null : key)} className="flex w-full items-start gap-3 px-3 py-2.5 text-left">
+                <span
+                  className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ background: CATEGORY_TONE[inc.category] ?? "#F59E0B", opacity: isMapped(inc) ? 1 : 0.45 }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-semibold">{inc.headline ?? inc.summary}</span>
+                  <span className="block text-[11px] text-zinc-500">
+                    {inc.category} · {isMapped(inc) ? inc.street : "no exact place"} · {timeAgo(inc.firstReportedAt ?? inc.publishedAt)}
+                  </span>
+                </span>
+                <span className="text-zinc-500">{expanded ? "−" : "+"}</span>
+              </button>
+              {expanded && (
+                <div className="border-t border-edge px-3 py-3">
+                  <IncidentDetails inc={inc} onRoute={near} />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

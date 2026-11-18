@@ -15,8 +15,37 @@ export function openUntil(v: Venue, hour: number): string {
   return "Open 24h";
 }
 
+const KIND_LABEL: Record<string, string> = {
+  police: "Police station",
+  hospital: "Hospital A&E",
+  station: "Staffed rail station",
+  bus_station: "Staffed bus station",
+  hotel: "Hotel reception",
+  hostel: "Hostel reception",
+  guest_house: "Guest house",
+  pub: "Pub · Ask for Angela",
+  bar: "Bar · Ask for Angela",
+  nightclub: "Nightclub · Ask for Angela",
+  casino: "Casino · staffed",
+  cinema: "Cinema · staffed",
+  theatre: "Theatre · staffed",
+  fuel: "Petrol station",
+  supermarket: "Supermarket",
+  convenience: "Convenience store",
+  alcohol: "Off-licence",
+  newsagent: "Newsagent",
+  kiosk: "Kiosk",
+  pharmacy: "Pharmacy",
+  chemist: "Chemist",
+  fast_food: "Takeaway",
+  restaurant: "Restaurant",
+  cafe: "Café",
+};
+
+export const kindLabel = (v: Venue) => KIND_LABEL[v.kind] ?? v.kind.replace(/_/g, " ");
+
 export const tierLabel = (v: Venue) =>
-  v.tier === 1 ? "Staffed venue · Ask for Angela" : "Late-night staffed refuge";
+  KIND_LABEL[v.kind] ?? (v.tier === 1 ? "Staffed venue · Ask for Angela" : "Late-night staffed refuge");
 
 /** Open venues sorted by walking-line distance from a point. */
 export function openVenuesNear(
