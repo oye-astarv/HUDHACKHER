@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import {
   CircleMarker,
   MapContainer,
@@ -34,7 +34,12 @@ function ClickToPick({ onPick }: { onPick: (lat: number, lon: number) => void })
 
 function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: RouteResult | null }) {
   const map = useMap();
-  useEffect(() => {
+
+  const fit = useCallback(() => {
+    // The map div is sized by CSS after Leaflet mounts, so Leaflet keeps a
+    // stale size and paints tiles/routes far outside the visible box until it
+    // is told to measure again.
+    map.invalidateSize();
     const coords = [...(fastest?.coords ?? []), ...(safe?.coords ?? [])];
     if (coords.length < 2) return;
     const lats = coords.map((c) => c[0]);
@@ -47,6 +52,14 @@ function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: Route
       { padding: [40, 60], maxZoom: 17 }
     );
   }, [fastest, safe, map]);
+
+  useEffect(() => {
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(map.getContainer());
+    return () => observer.disconnect();
+  }, [fit, map]);
+
   return null;
 }
 
@@ -68,11 +81,14 @@ export default function MapCanvas({
       attributionControl
       className="h-full w-full"
     >
+      {/* CARTO now serves "API KEY REQUIRED" placeholder tiles without a key,
+          so the basemap moved to Esri's keyless dark canvas. maxNativeZoom
+          keeps zooming past z16 by upscaling the last real tiles. */}
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        subdomains={["a", "b", "c", "d"]}
-        attribution='&copy; OpenStreetMap &copy; CARTO'
-        maxZoom={20}
+        url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+        attribution="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
+        maxNativeZoom={16}
+        maxZoom={19}
       />
 
       <ClickToPick onPick={onPick} />
