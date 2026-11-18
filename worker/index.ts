@@ -25,6 +25,13 @@ export interface Env {
   TEXTBELT_KEY?: string;
   /** Override the Twilio API host. Only for pointing at a local mock in tests. */
   TWILIO_BASE_URL?: string;
+  /**
+   * textbee.dev key: free tier texts through your own Android phone's SIM
+   * (300 messages/month), no card. Used when Twilio is not configured.
+   */
+  TEXTBEE_API_KEY?: string;
+  /** Override the textbee host. Only for pointing at a local mock in tests. */
+  TEXTBEE_BASE_URL?: string;
   /** Minutes between automatic position texts while an alert is active. */
   SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
@@ -302,12 +309,33 @@ type DispatchResult = { name: string; ok: boolean; error?: string };
 
 const twilioReady = (env: Env) =>
   Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
+const textbeeReady = (env: Env) => Boolean(env.TEXTBEE_API_KEY);
 
 /** The public Textbelt key is rate-limited to one text a day. */
-const onFreeTextbelt = (env: Env) => !twilioReady(env) && env.TEXTBELT_KEY === "textbelt";
+const onFreeTextbelt = (env: Env) =>
+  !twilioReady(env) && !textbeeReady(env) && env.TEXTBELT_KEY === "textbelt";
 
+/** Twilio, else textbee, else Textbelt. */
 async function sendSms(env: Env, to: string, body: string): Promise<void> {
-  return twilioReady(env) ? sendViaTwilio(env, to, body) : sendViaTextbelt(env, to, body);
+  if (twilioReady(env)) return sendViaTwilio(env, to, body);
+  if (textbeeReady(env)) return sendViaTextbee(env, to, body);
+  return sendViaTextbelt(env, to, body);
+}
+
+/** Free tier: the message is pushed to your Android phone, which sends the SMS. */
+async function sendViaTextbee(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.TEXTBEE_BASE_URL ?? "https://api.textbee.dev").replace(/\/$/, "");
+  const res = await fetch(`${base}/api/v1/gateway/send-sms`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": env.TEXTBEE_API_KEY! },
+    body: JSON.stringify({ message: body, recipients: [to], simSlotIndex: 0 }),
+  });
+  const out = (await res.json().catch(() => null)) as {
+    message?: string;
+    error?: string;
+    smsBatchId?: string;
+  } | null;
+  if (!res.ok) throw new Error(out?.message ?? out?.error ?? `HTTP ${res.status}`);
 }
 
 async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void> {
@@ -457,7 +485,7 @@ async function trigger(req: Request, env: Env): Promise<Response> {
       `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} walking to ${targetName}.`
     : message;
 
-  const configured = twilioReady(env) || Boolean(env.TEXTBELT_KEY);
+  const configured = twilioReady(env) || textbeeReady(env) || Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
@@ -481,7 +509,13 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     updatesMinutes: updateMinutes,
     dispatch: {
       mode: configured ? "sms" : "manual",
-      provider: twilioReady(env) ? "twilio" : env.TEXTBELT_KEY ? "textbelt" : null,
+      provider: twilioReady(env)
+        ? "twilio"
+        : textbeeReady(env)
+          ? "textbee"
+          : env.TEXTBELT_KEY
+            ? "textbelt"
+            : null,
       results,
       configured,
     },

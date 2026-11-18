@@ -15,7 +15,14 @@ SMS_UPDATE_MINUTES=10
 # Testing only: point the Twilio client at a local mock instead of the real API.
 # TWILIO_BASE_URL=http://127.0.0.1:9099
 
-# --- Sender 2: Textbelt (no monthly fee, one-time credit pack) ---
+# --- Sender 2: textbee.dev (free: 300 texts/month, no card) ---
+# Sends through your own Android phone's SIM: install their app, register the
+# device, paste the API key here. Used when Twilio is not configured.
+# TEXTBEE_API_KEY=your_textbee_api_key
+# Testing only: point it at a mock instead of the real gateway.
+# TEXTBEE_BASE_URL=http://127.0.0.1:9100
+
+# --- Sender 3: Textbelt (no monthly fee, one-time credit pack) ---
 # Used automatically when the three Twilio values are absent. The public
 # "textbelt" key refuses UK numbers, so only a purchased key is useful here.
 # TEXTBELT_KEY=your_purchased_textbelt_key
