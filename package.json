@@ -10,7 +10,8 @@
     "deploy": "next build && wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker/tsconfig.json",
     "data:graph": "node scripts/build-data.mjs",
-    "data:news": "node --env-file-if-exists=.dev.vars scripts/fetch-news.mjs"
+    "data:news": "node --env-file-if-exists=.dev.vars scripts/fetch-news.mjs",
+    "eval:routing": "esbuild scripts/eval-routing.ts --bundle --platform=node --format=esm --outfile=.cache/eval-routing.mjs --log-level=warning && node .cache/eval-routing.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",

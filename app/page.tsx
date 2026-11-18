@@ -10,7 +10,7 @@ import { dayLight, fmtTime, loadData, type DataBundle } from "@/lib/data";
 import { distanceM, pointAlong, polylineLength } from "@/lib/geo";
 import { prepare } from "@/lib/graph";
 import { DEFAULT_REGION, inRegion, nearestRegion, regionAt, regionById, REGIONS, type Region } from "@/lib/regions";
-import { computeRoutes, INCIDENT_FACTOR, nearestHaven, OPEN_VENUE_FACTOR, routeTo, STREET_FACTORS } from "@/lib/routing";
+import { BAND, computeRoutes, nearestHaven, RISK, RISK_WEIGHT, routeTo } from "@/lib/routing";
 import {
   fetchSession,
   loadAlert,
@@ -28,7 +28,7 @@ import {
 import IncidentDetails from "@/components/IncidentDetails";
 import { CATEGORY_TONE, timeAgo } from "@/lib/incidents";
 import { isMapped, type Incident, type RouteAudit, type RouteResult, type Venue } from "@/lib/types";
-import { kindLabel, openUntil, openVenuesNear, tierLabel, venuesAlong } from "@/lib/venues";
+import { openUntil, openVenuesNear, tierLabel, venuesAlong } from "@/lib/venues";
 
 const MapCanvas = dynamic(() => import("@/components/MapCanvas"), {
   ssr: false,
@@ -199,11 +199,15 @@ export default function Page() {
     [current, hourInt]
   );
 
-  const labelled = useMemo(() => {
+
+
+  // only venues near either route are drawn — the rest are noise at walking scale
+  const mapVenues = useMemo(() => {
     if (!current || !ok) return [];
-    return venuesAlong(current.venues, ok.safe.coords, origin, hourInt)
-      .slice(0, 3)
-      .map((x) => ({ ...x, note: `${openUntil(x.venue, hourInt)} · ${kindLabel(x.venue)}${x.venue.assumed ? " (est.)" : ""}` }));
+    const near = new Set<Venue>();
+    for (const c of [ok.safe.coords, ok.fastest.coords])
+      for (const x of venuesAlong(current.venues, c, origin, hourInt, 120)) near.add(x.venue);
+    return [...near];
   }, [current, ok, origin, hourInt]);
 
   const chosen: RouteResult | null = ok ? (selected === "safe" ? ok.safe : ok.fastest) : null;
@@ -621,14 +625,13 @@ export default function Page() {
           </div>
 
           {/* map */}
-          <div className="relative h-[360px] border-b border-edge">
+          <div className="relative h-[420px] border-b border-edge">
             <MapCanvas
               centre={region.centre}
               fastest={ok.fastest}
               safe={ok.sameRoute ? null : ok.safe}
-              selected={selected}
-              venues={openVenues}
-              labelled={labelled}
+              selected={ok.sameRoute ? "fastest" : selected}
+              venues={mapVenues}
               incidents={current.incidents}
               origin={[origin.lat, origin.lon]}
               destination={[destination.lat, destination.lon]}
@@ -645,8 +648,24 @@ export default function Page() {
               }}
               accuracy={gpsInUse && loc.fix ? { centre: [loc.fix.lat, loc.fix.lon], metres: loc.fix.accuracy } : null}
             />
-            <div className="absolute bottom-3 left-3 z-[1000] flex items-center border border-edge bg-ink/90 text-[11px]">
-              <span className="px-2 text-zinc-500">Tap map to set</span>
+            {/* which route is drawn in colour */}
+            <div className="absolute left-3 top-3 z-[1000] flex border border-edge bg-ink/95 text-[12px] font-bold shadow-lg">
+              {ok.sameRoute ? (
+                <span className="px-3 py-2 text-[#2BFF88]">Shortest route is also the safest</span>
+              ) : (
+                (["safe", "fastest"] as const).map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => setSelected(k)}
+                    className={`px-3 py-2 ${selected === k ? (k === "safe" ? "bg-[#2BFF88] text-ink" : "bg-zinc-100 text-ink") : "text-zinc-300"}`}
+                  >
+                    {k === "safe" ? `Recommended · ${ok.safe.audit.safetyScore}` : `Shortest · ${ok.fastest.audit.safetyScore}`}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="absolute right-3 top-3 z-[1000] flex flex-col items-stretch border border-edge bg-ink/95 text-[11px] shadow-lg">
+              <span className="px-2 pt-1 text-center text-zinc-500">Tap map sets</span>
               {(["start", "destination"] as const).map((m) => (
                 <button
                   key={m}
@@ -658,10 +677,29 @@ export default function Page() {
               ))}
             </div>
             {toast && (
-              <div className="pointer-events-none absolute inset-x-3 top-3 z-[1000] border border-safe/50 bg-ink/95 px-3 py-2 text-[12px] text-safe">
+              <div className="pointer-events-none absolute inset-x-3 bottom-3 z-[1000] border border-safe/50 bg-ink/95 px-3 py-2 text-[12px] text-safe">
                 {toast}
               </div>
             )}
+          </div>
+
+          {/* map legend */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge bg-ink px-4 py-2 text-[11px] text-zinc-400">
+            <span className="font-semibold text-zinc-300">{selected === "safe" && !ok.sameRoute ? "Recommended" : "Shortest"} route:</span>
+            <LegendSwatch colour="#2BFF88" label="safe" />
+            <LegendSwatch colour="#FFC233" label="caution" />
+            <LegendSwatch colour="#FF4D4D" label="risky" />
+            {!ok.sameRoute && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 border-t-2 border-dotted border-zinc-200" /> other route
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2 w-2 rounded-full bg-zinc-300" /> open venue
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-amber-400 bg-amber-400/30" /> news alert
+            </span>
           </div>
 
           {/* route comparison */}
@@ -699,11 +737,24 @@ export default function Page() {
                 Both routes are the same here — the safest path is also the shortest.
               </p>
             )}
-            <p className="text-[11px] leading-relaxed text-zinc-500">
-              {light.isDark
-                ? `After dark: ${Math.round(ok.safe.audit.litShare * 100)}% of the recommended route is confirmed lit, ${Math.round(ok.safe.audit.inferredShare * 100)}% inferred from road type, ${Math.round(ok.safe.audit.unknownShare * 100)}% has no lighting data.`
-                : `Daylight — lighting doesn't affect routing until sunset at ${fmtTime(light.sunset)}.`}
-            </p>
+            {light.isDark ? (
+              <p className="text-[11px] leading-relaxed text-zinc-500">
+                After dark: {Math.round(ok.safe.audit.litShare * 100)}% of the recommended route is mapped as lit,{" "}
+                {Math.round(ok.safe.audit.inferredShare * 100)}% is likely lit (main road or ordinary street — most streets
+                aren&apos;t mapped, so this is estimated), {Math.round(ok.safe.audit.unknownShare * 100)}% is footpath or
+                service road with no lighting data.
+              </p>
+            ) : (
+              <div className="flex items-center gap-3 border border-amber-400/50 bg-amber-400/10 px-3 py-2 text-[12px]">
+                <p className="flex-1 text-amber-200">
+                  Daylight: lighting isn&apos;t counted yet, so the routes only differ to avoid quiet footpaths, car parks,
+                  underpasses and incidents. Night routing starts at sunset ({fmtTime(light.sunset)}).
+                </p>
+                <button onClick={() => setHour(23.5)} className="shrink-0 bg-amber-400 px-2.5 py-1.5 text-[11px] font-bold text-ink">
+                  Preview tonight
+                </button>
+              </div>
+            )}
             {!ok.sameRoute && <RouteReasons safe={ok.safe.audit} fast={ok.fastest.audit} isDark={light.isDark} />}
             <ScoringExplainer isDark={light.isDark} />
             <WalkScrubber length={walkLength} metres={walkMetres} onChange={setWalkMetres} minutes={chosen?.audit.minutes ?? 0} />
@@ -860,6 +911,7 @@ function RouteCard({
         <span className="ml-1 text-[15px] font-semibold">MIN</span>
       </p>
       <p className="mt-1 text-[12px] text-zinc-500">{sub}</p>
+      <SafetyBar audit={a} />
       <dl className="mt-3 space-y-2 border-t border-edge pt-3 text-[12px]">
         <Stat label="Lit roads" value={`${lit}%`} tone={litGood ? "green" : "red"} />
         <Stat label="Open safe havens" value={a.openVenues ? `${a.openVenues} open` : "0 (isolated)"} tone={a.openVenues ? "white" : "muted"} />
@@ -870,6 +922,41 @@ function RouteCard({
         />
       </dl>
     </button>
+  );
+}
+
+/** Safety score plus how much of the route is green / amber / red. */
+function LegendSwatch({ colour, label }: { colour: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span className="inline-block h-1.5 w-5 rounded-full" style={{ background: colour }} />
+      {label}
+    </span>
+  );
+}
+
+function SafetyBar({ audit }: { audit: RouteAudit }) {
+  const total = Math.max(1, audit.safeMetres + audit.cautionMetres + audit.riskyMetres);
+  const tone = audit.safetyScore >= 75 ? "#2BFF88" : audit.safetyScore >= 50 ? "#FFC233" : "#FF4D4D";
+  return (
+    <div className="mt-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500">Safety score</span>
+        <span className="text-[18px] font-extrabold tabular-nums" style={{ color: tone }}>
+          {audit.safetyScore}
+          <span className="text-[11px] font-semibold text-zinc-500">/100</span>
+        </span>
+      </div>
+      <div className="mt-1 flex h-2 w-full overflow-hidden bg-edge">
+        <span style={{ width: `${(audit.safeMetres / total) * 100}%`, background: "#2BFF88" }} />
+        <span style={{ width: `${(audit.cautionMetres / total) * 100}%`, background: "#FFC233" }} />
+        <span style={{ width: `${(audit.riskyMetres / total) * 100}%`, background: "#FF4D4D" }} />
+      </div>
+      <p className="mt-1 text-[10px] text-zinc-500">
+        {audit.riskyMetres > 0 ? <span className="text-red-300">{audit.riskyMetres} m risky</span> : "no risky stretches"}
+        {audit.cautionMetres > 0 && <> · {audit.cautionMetres} m caution</>}
+      </p>
+    </div>
   );
 }
 
@@ -957,6 +1044,13 @@ function RouteReasons({ safe, fast, isDark }: { safe: RouteAudit; fast: RouteAud
     else if (b - a >= 15) reasons.push({ good: false, text: `Uses ${b - a} m more ${label}` });
   };
 
+  if (fast.riskyMetres - safe.riskyMetres >= 20)
+    reasons.push({
+      good: true,
+      text: `Cuts risky walking (dark, isolated or near an incident) from ${fast.riskyMetres} m to ${safe.riskyMetres} m`,
+    });
+  if (safe.safetyScore > fast.safetyScore)
+    reasons.push({ good: true, text: `Safety score ${safe.safetyScore}/100 vs ${fast.safetyScore}/100 for the shortest route` });
   if (fast.incidentsOnPath > safe.incidentsOnPath)
     reasons.push({ good: true, text: `Detours around ${fast.incidentsOnPath - safe.incidentsOnPath} recent news incident${fast.incidentsOnPath - safe.incidentsOnPath > 1 ? "s" : ""}` });
   const litS = pct(safe.litShare + safe.inferredShare);
@@ -996,40 +1090,54 @@ function RouteReasons({ safe, fast, isDark }: { safe: RouteAudit; fast: RouteAud
 }
 
 function ScoringExplainer({ isDark }: { isDark: boolean }) {
-  const k = isDark ? STREET_FACTORS.dark : STREET_FACTORS.day;
-  const rows: [string, string][] = isDark
+  const pts = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+  const rows: [string, number][] = isDark
     ? [
-        ["Mapped unlit, or a footpath through a park", "×3.5 cost"],
-        ["No lighting data (footpath / street)", "×2.8 / ×1.9"],
-        ["Underpass or covered passage", `×${k.tunnel}`],
-        ["Rural track or bridleway", `×${k.track}`],
-        ["Alleyway / snicket", `×${k.alley}`],
-        ["Service road, car park, yard", `×${k.service}`],
-        ["Steps", `×${k.steps}`],
-        ["Within 100 m of a recent news incident", `×${INCIDENT_FACTOR}`],
-        ["Main road (likely lit, traffic, passers-by)", `×${(0.85 * k.major).toFixed(2)}`],
-        ["Open venue within 50 m right now", `×${OPEN_VENUE_FACTOR}`],
-        ["Pedestrian high street or bus stop", `×${k.busy}`],
-        ["Mapped CCTV within 40 m", `×${k.cctv}`],
+        ["Mapped unlit street, or a footpath through a park", RISK.light.unlit],
+        ["Footpath with no lighting data", RISK.light.unknownPath],
+        ["Service road with no lighting data", RISK.light.unknownService],
+        ["Ordinary street, not mapped (assumed council-lit)", RISK.light.unknownStreet],
+        ["Main road (usually lit)", RISK.light.mainRoad],
+        ["Street mapped as lit / lamp within 25 m", RISK.light.lit],
+        ["Underpass or covered passage", RISK.isolation.underpass],
+        ["Alleyway / snicket", RISK.isolation.alley],
+        ["Rural track or bridleway", RISK.isolation.track],
+        ["Footpath away from roads", RISK.isolation.footpath],
+        ["Service road, car park, yard", RISK.isolation.service],
+        ["Steps", RISK.isolation.steps],
+        ["Open venue within 50 m right now", RISK.activity.openVenue],
+        ["Main road traffic & passers-by", RISK.activity.mainRoad],
+        ["High street or bus stop", RISK.activity.busy],
+        ["Mapped CCTV within 40 m", RISK.activity.cctv],
+        ["Within 100 m of a recent news incident", RISK.incident],
       ]
     : [
-        ["Underpass or covered passage", `×${k.tunnel}`],
-        ["Rural track or bridleway", `×${k.track}`],
-        ["Alleyway / snicket", `×${k.alley}`],
-        ["Within 100 m of a recent news incident", `×${INCIDENT_FACTOR}`],
+        ["Underpass or covered passage", +(RISK.isolation.underpass * 0.6).toFixed(2)],
+        ["Alleyway / snicket", RISK.isolation.alley * 0.6],
+        ["Rural track or bridleway", RISK.isolation.track * 0.6],
+        ["Footpath away from roads", 0.1],
+        ["Service road, car park, yard", 0.1],
+        ["Main road", -0.05],
+        ["High street or bus stop", -0.05],
+        ["Within 100 m of a recent news incident", RISK.incident],
       ];
+  const k = isDark ? RISK_WEIGHT.dark : RISK_WEIGHT.day;
   return (
     <details className="border border-edge bg-ink/60 p-3 text-[12px]">
-      <summary className="cursor-pointer font-semibold text-zinc-300">How routes are scored {isDark ? "after dark" : "in daylight"}</summary>
-      <p className="mt-2 text-[11px] text-zinc-500">
-        Each street&apos;s length is multiplied by these factors; the recommended route has the lowest total. Lower than ×1
-        means preferred. Street data from OpenStreetMap: lighting tags and mapped lamps, road type, CCTV, bus stops, parks.
+      <summary className="cursor-pointer font-semibold text-zinc-300">How safety is scored {isDark ? "after dark" : "in daylight"}</summary>
+      <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+        Every street gets a risk score by adding these points (0 = safe, capped at 1.5). The route&apos;s cost is length × (1 +{" "}
+        {k} × risk), so a risky street counts up to {(1 + k * 1.5).toFixed(1)}× its length and the recommended route detours
+        to avoid it. On the map: <span className="font-semibold text-[#2BFF88]">green</span> under {BAND.safe},{" "}
+        <span className="font-semibold text-[#FFC233]">amber</span> under {BAND.caution},{" "}
+        <span className="font-semibold text-[#FF4D4D]">red</span> above. Data: OpenStreetMap lighting tags and lamps, road
+        type, CCTV, bus stops, parks, live opening hours, local news.
       </p>
       <dl className="mt-2 space-y-1">
         {rows.map(([label, v]) => (
           <div key={label} className="flex justify-between gap-3">
             <dt className="text-zinc-400">{label}</dt>
-            <dd className={`shrink-0 tabular-nums ${v.startsWith("×0") ? "text-safe" : "text-amber-300"}`}>{v}</dd>
+            <dd className={`shrink-0 tabular-nums ${v < 0 ? "text-safe" : v === 0 ? "text-zinc-300" : v >= 0.5 ? "text-red-300" : "text-amber-300"}`}>{pts(v)}</dd>
           </div>
         ))}
       </dl>

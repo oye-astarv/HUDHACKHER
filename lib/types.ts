@@ -107,12 +107,20 @@ export type RouteAudit = {
   serviceMetres: number;
   stepsMetres: number;
   footpathMetres: number;
+  /** 0–100, length-weighted (see RISK in lib/routing.ts) */
+  safetyScore: number;
+  safeMetres: number;
+  cautionMetres: number;
+  riskyMetres: number;
 };
+
+export type RouteSegment = { band: "safe" | "caution" | "risky"; coords: [number, number][] };
 
 export type RouteResult = {
   kind: "fastest" | "safe";
   coords: [number, number][];
   audit: RouteAudit;
+  segments: RouteSegment[];
 };
 
 export type RouteResponse = {

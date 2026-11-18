@@ -2,10 +2,12 @@
 
 import { useEffect } from "react";
 import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import {
   Circle,
   CircleMarker,
   MapContainer,
+  Marker,
   Polyline,
   Popup,
   TileLayer,
@@ -120,37 +122,45 @@ export default function MapCanvas({
       {onPick && !compact && <ClickToPick onPick={onPick} />}
       <Fit coords={fitCoords} compact={compact} />
 
-      {/* shortest: dashed grey */}
-      {fastest && (
-        <Polyline
-          positions={fastest.coords}
-          pathOptions={{
-            color: GREY,
-            weight: selected === "fastest" ? 5 : 3.5,
-            opacity: selected === "fastest" ? 0.95 : 0.7,
-            dashArray: "7 8",
-            lineCap: "round",
-          }}
-        >
-          <Tooltip sticky>Shortest route · {fastest.audit.minutes} min</Tooltip>
-        </Polyline>
-      )}
+      {!compact &&
+        incidents.filter(isMapped).map((inc, i) => (
+          <Circle
+            key={`inc-r-${inc.id ?? i}`}
+            center={[inc.lat, inc.lon]}
+            radius={100}
+            pathOptions={{ color: AMBER, weight: 1, opacity: 0.5, fillOpacity: 0.08, dashArray: "2 6" }}
+            interactive={false}
+          />
+        ))}
 
-      {/* lit & open: solid green with a soft glow */}
-      {safe && (
-        <>
-          <Polyline positions={safe.coords} pathOptions={{ color: GREEN, weight: 12, opacity: 0.14 }} />
-          <Polyline
-            positions={safe.coords}
-            pathOptions={{
-              color: GREEN,
-              weight: selected === "safe" ? 5 : 3.5,
-              opacity: selected === "safe" ? 1 : 0.7,
-              lineCap: "round",
-            }}
+      {/* open venues: small and neutral so they never compete with the route */}
+      {!compact &&
+        venues.map((v, i) => (
+          <CircleMarker
+            key={`${v.name}-${i}`}
+            center={[v.lat, v.lon]}
+            radius={v.tier === 1 ? 4 : 3}
+            bubblingMouseEvents={false}
+            pathOptions={{ color: "#0E0E10", weight: 1, fillColor: v.tier === 1 ? "#E4E4E7" : "#A1A1AA", fillOpacity: 0.9 }}
           >
-            <Tooltip sticky>Lit &amp; open route · {safe.audit.minutes} min</Tooltip>
-          </Polyline>
+            <Tooltip>
+              <b>{v.name}</b>
+              <br />
+              {tierLabel(v)} · {v.hours}
+            </Tooltip>
+          </CircleMarker>
+        ))}
+
+      {/* the unselected route underneath, the selected one on top */}
+      {selected === "safe" ? (
+        <>
+          {fastest && <RouteLine route={fastest} kind="fastest" active={false} />}
+          {safe && <RouteLine route={safe} kind="safe" active />}
+        </>
+      ) : (
+        <>
+          {safe && <RouteLine route={safe} kind="safe" active={false} />}
+          {fastest && <RouteLine route={fastest} kind="fastest" active />}
         </>
       )}
 
@@ -165,42 +175,23 @@ export default function MapCanvas({
         <Polyline positions={trail} pathOptions={{ color: "#60A5FA", weight: 4, opacity: 0.8 }} />
       )}
 
-      {!compact &&
-        venues.map((v, i) => (
-          <CircleMarker
-            key={`${v.name}-${i}`}
-            center={[v.lat, v.lon]}
-            radius={v.tier === 1 ? 5 : 4}
-            pathOptions={{
-              color: GREEN,
-              fillColor: GREEN,
-              fillOpacity: v.tier === 1 ? 0.8 : 0.45,
-              weight: 1.5,
-              opacity: 0.8,
-            }}
-          >
-            <Tooltip>
-              <b>{v.name}</b>
-              <br />
-              {tierLabel(v)} · {v.hours}
-            </Tooltip>
-          </CircleMarker>
-        ))}
-
       {labelled.map(({ venue, metres, note }, i) => (
         <CircleMarker
           key={`lab-${venue.name}-${i}`}
           center={[venue.lat, venue.lon]}
-          radius={6}
-          pathOptions={{ color: GREEN, fillColor: GREEN, fillOpacity: 1, weight: 2 }}
+          radius={5}
+          bubblingMouseEvents={false}
+          pathOptions={{ color: "#0E0E10", fillColor: "#FFFFFF", fillOpacity: 1, weight: 2 }}
         >
-          <Tooltip permanent direction={i % 2 ? "left" : "right"} offset={[i % 2 ? -8 : 8, 0]} className="ss-callout ss-callout-green">
+          <Tooltip permanent direction="auto" offset={[0, 0]} className="ss-callout ss-callout-venue">
             <span className="ss-callout-title">{venue.name}</span>
             {metres > 0 && <span className="ss-callout-dist"> · {Math.round(metres)}m</span>}
-            <br />
-            <span className="ss-callout-sub">
-              {note}
-            </span>
+            {note && (
+              <>
+                <br />
+                <span className="ss-callout-sub">{note}</span>
+              </>
+            )}
           </Tooltip>
         </CircleMarker>
       ))}
@@ -217,27 +208,13 @@ export default function MapCanvas({
             {/* 100 m detour radius the router applies */}
             <Tooltip permanent direction="top" offset={[0, -10]} className="ss-callout ss-callout-amber">
               <span className="ss-callout-title">! {inc.category}</span>
-              <br />
-              <span className="ss-callout-sub">
-                {inc.street} · {timeAgo(inc.firstReportedAt ?? inc.publishedAt)} · tap
-              </span>
+              <span className="ss-callout-sub"> · {timeAgo(inc.firstReportedAt ?? inc.publishedAt)} · tap</span>
             </Tooltip>
             <Popup className="ss-popup" maxWidth={290} minWidth={240} autoPanPadding={[16, 16]}>
               <IncidentDetails inc={inc} />
             </Popup>
           </CircleMarker>
         ))}
-      {!compact &&
-        incidents.filter(isMapped).map((inc, i) => (
-          <Circle
-            key={`inc-r-${inc.id ?? i}`}
-            center={[inc.lat, inc.lon]}
-            radius={100}
-            pathOptions={{ color: AMBER, weight: 1, opacity: 0.4, fillOpacity: 0.06, dashArray: "2 6" }}
-            interactive={false}
-          />
-        ))}
-
       {accuracy && accuracy.metres < 2000 && (
         <Circle
           center={accuracy.centre}
@@ -247,7 +224,14 @@ export default function MapCanvas({
         />
       )}
 
-      {origin && (
+      {origin && !compact && trail.length === 0 && (
+        <Marker position={origin} icon={pinIcon("A")} zIndexOffset={900} keyboard={false}>
+          <Tooltip direction="right" offset={[14, -14]} className="ss-tag">
+            Start
+          </Tooltip>
+        </Marker>
+      )}
+      {origin && (compact || trail.length > 0) && (
         <CircleMarker
           center={origin}
           radius={compact ? 7 : 8}
@@ -259,7 +243,14 @@ export default function MapCanvas({
         </CircleMarker>
       )}
 
-      {destination && !sos && (
+      {destination && !sos && !compact && trail.length === 0 && (
+        <Marker position={destination} icon={pinIcon("B")} zIndexOffset={1000} keyboard={false}>
+          <Tooltip direction="right" offset={[14, -14]} className="ss-tag">
+            Destination
+          </Tooltip>
+        </Marker>
+      )}
+      {destination && !sos && (compact || trail.length > 0) && (
         <CircleMarker
           center={destination}
           radius={8}
@@ -291,5 +282,57 @@ export default function MapCanvas({
         </CircleMarker>
       )}
     </MapContainer>
+  );
+}
+
+/** Square A / B pins (matches the A / B badges in the route form). */
+function pinIcon(letter: "A" | "B") {
+  return L.divIcon({
+    className: "",
+    html: `<div class="ss-pin ss-pin-${letter.toLowerCase()}">${letter}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
+  });
+}
+
+export const BAND_COLOUR = { safe: "#2BFF88", caution: "#FFC233", risky: "#FF4D4D" } as const;
+
+/**
+ * The selected route: thick, dark-cased, each stretch coloured by its safety
+ * band. The other route: thin dashed white for comparison.
+ */
+function RouteLine({ route, kind, active }: { route: RouteResult; kind: "safe" | "fastest"; active: boolean }) {
+  const label = `${kind === "safe" ? "Recommended (lit & open)" : "Shortest"} · ${route.audit.minutes} min · safety ${route.audit.safetyScore}/100`;
+  if (!active) {
+    return (
+      <>
+        <Polyline positions={route.coords} interactive={false} pathOptions={{ color: "#0E0E10", weight: 6, opacity: 0.55, lineCap: "round" }} />
+        <Polyline positions={route.coords} pathOptions={{ color: "#F4F4F5", weight: 3, opacity: 0.75, dashArray: "1 8", lineCap: "round" }}>
+          <Tooltip sticky>{label} — tap its card or the switch to view</Tooltip>
+        </Polyline>
+      </>
+    );
+  }
+  return (
+    <>
+      <Polyline
+        positions={route.coords}
+        interactive={false}
+        pathOptions={{ color: "#000000", weight: 12, opacity: 0.85, lineCap: "round", lineJoin: "round" }}
+      />
+      {route.segments.map((seg, i) => (
+        <Polyline
+          key={i}
+          positions={seg.coords}
+          pathOptions={{ color: BAND_COLOUR[seg.band], weight: 7, opacity: 1, lineCap: "round", lineJoin: "round" }}
+        >
+          <Tooltip sticky>
+            {label}
+            <br />
+            This stretch: {seg.band === "safe" ? "safe" : seg.band === "caution" ? "caution" : "risky — dark, isolated or near an incident"}
+          </Tooltip>
+        </Polyline>
+      ))}
+    </>
   );
 }

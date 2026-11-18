@@ -50,7 +50,26 @@ body {
 
 /* OSM tiles darkened (CARTO now requires an API key) */
 .dark-tiles {
-  filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(0.92) saturate(0.45);
+  /* darker and lower-contrast than the routes so coloured lines stand out */
+  filter: invert(1) hue-rotate(180deg) brightness(0.55) contrast(1.15) saturate(0.25);
+}
+
+.ss-pin {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font: 800 13px/1 Inter, system-ui, sans-serif;
+  border: 2px solid #0e0e10;
+  box-shadow: 0 0 0 2px #ffffff, 0 4px 12px rgba(0, 0, 0, 0.6);
+}
+.ss-pin-a {
+  background: #ffffff;
+  color: #0e0e10;
+}
+.ss-pin-b {
+  background: #d92d2d;
+  color: #ffffff;
 }
 
 /* map callouts, styled after the design mock */
@@ -69,6 +88,11 @@ body {
 }
 .ss-callout-green {
   border: 1px solid #4ade80 !important;
+}
+.ss-callout-venue {
+  border: 1px solid #52525b !important;
+  padding: 3px 6px !important;
+  font-size: 10px !important;
 }
 .ss-callout-amber {
   border: 1px solid #f59e0b !important;
