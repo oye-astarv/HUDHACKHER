@@ -65,8 +65,8 @@ export default function ContactsSetup({
         </p>
         <h2 className="mt-1 text-xl font-bold">Who should we alert?</h2>
         <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
-          One tap on SOS sends them a WhatsApp with your live location. No account needed. This
-          stays on this phone.
+          One tap on SOS sends them a text with your live location and the safe haven you are
+          walking to. No account needed on their side, and this stays on your phone.
         </p>
       </div>
 
@@ -122,8 +122,8 @@ export default function ContactsSetup({
           </button>
         )}
         <p className="text-[10px] leading-relaxed text-slate-500">
-          Demo note: with the Twilio WhatsApp sandbox, each contact must first send the join code
-          to the sandbox number from their own WhatsApp.
+          Texted from a Twilio number. Trial accounts can only message numbers verified in the
+          Twilio console.
         </p>
       </div>
 

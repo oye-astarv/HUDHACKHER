@@ -17,9 +17,9 @@ import {
   loadProfile,
   pushPoint,
   resolveAlert,
+  openSmsApp,
   saveAlert,
   saveProfile,
-  shareManually,
   triggerEmergency,
   type ActiveAlert,
   type Profile,
@@ -295,6 +295,13 @@ export default function Page() {
         setAlert(a);
         saveAlert(a);
         setSosState({ phase: "active", alert: a });
+
+        // If the server could not text anyone (no SMS account, or every send
+        // failed), hand the alert to the phone's messaging app straight away.
+        const failed = a.dispatch.results.filter((r) => !r.ok).length;
+        if (a.dispatch.mode !== "sms" || failed > 0) {
+          openSmsApp(a, profile.contacts[0]?.phone);
+        }
       } catch (e) {
         setSosState({ phase: "failed", error: `Couldn't reach the alert server (${(e as Error).message}).` });
       }
@@ -833,7 +840,7 @@ export default function Page() {
           }}
           onBack={() => setGuidanceOpen(false)}
           onRetry={() => sendAlert(haven, livePoint ? { lat: livePoint[0], lon: livePoint[1] } : sosStart())}
-          onShareManual={() => alert && shareManually(alert)}
+          onShareManual={() => alert && openSmsApp(alert, profile?.contacts[0]?.phone)}
           onResolve={onResolve}
         />
       )}

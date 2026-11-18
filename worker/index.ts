@@ -1,7 +1,7 @@
 /**
  * SafeStride Worker: serves the static PWA (out/) and the emergency API.
  *
- *   POST /api/emergency/trigger     start a session + WhatsApp the contacts
+ *   POST /api/emergency/trigger     start a session + SMS the contacts
  *   GET  /api/track/:id             follower view polls this
  *   POST /api/track/:id             owner device pushes a GPS fix
  *   POST /api/track/:id/resolve     owner ends the alert with the Safety PIN
@@ -16,8 +16,13 @@ export interface Env {
   TRACK: DurableObjectNamespace<TrackSession>;
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
-  /** e.g. whatsapp:+14155238886 (the Twilio sandbox number) */
-  TWILIO_WHATSAPP_FROM?: string;
+  /** E.164 SMS sender, e.g. +447700900123 (a Twilio number that can send SMS) */
+  TWILIO_SMS_FROM?: string;
+  /**
+   * Textbelt key. "textbelt" is the public key: one free text per day, no
+   * signup — enough to demo a real SMS arriving on a phone.
+   */
+  TEXTBELT_KEY?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
   PUBLIC_ORIGIN?: string;
 }
@@ -85,6 +90,18 @@ function safeEqual(a: string, b: string): boolean {
   const bb = enc.encode(b);
   if (ab.byteLength !== bb.byteLength) return false;
   return crypto.subtle.timingSafeEqual(ab, bb);
+}
+
+/**
+ * UK-friendly E.164: "07700 900123" -> "+447700900123". Done server-side too,
+ * so a client that forgets to normalise can't silently send to nobody.
+ */
+function normalisePhone(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let p = raw.replace(/[\s()-]/g, "");
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+  if (/^0\d{9,10}$/.test(p)) p = "+44" + p.slice(1);
+  return /^\+[1-9]\d{7,14}$/.test(p) ? p : null;
 }
 
 const isLat = (n: unknown): n is number => typeof n === "number" && n >= -90 && n <= 90;
@@ -174,16 +191,40 @@ export class TrackSession extends DurableObject<Env> {
   }
 }
 
-// ---------- WhatsApp dispatch (Twilio) ----------
+// ---------- SMS dispatch ----------
 
 type Contact = { name: string; phone: string };
 type DispatchResult = { name: string; ok: boolean; error?: string };
 
-async function sendWhatsApp(env: Env, to: string, body: string): Promise<void> {
+const twilioReady = (env: Env) =>
+  Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
+
+/** The public Textbelt key is rate-limited to one text a day. */
+const onFreeTextbelt = (env: Env) => !twilioReady(env) && env.TEXTBELT_KEY === "textbelt";
+
+async function sendSms(env: Env, to: string, body: string): Promise<void> {
+  return twilioReady(env) ? sendViaTwilio(env, to, body) : sendViaTextbelt(env, to, body);
+}
+
+async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void> {
+  const res = await fetch("https://textbelt.com/text", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ phone: to, message: body, key: env.TEXTBELT_KEY! }),
+  });
+  const out = (await res.json().catch(() => null)) as {
+    success?: boolean;
+    error?: string;
+    quotaRemaining?: number;
+  } | null;
+  if (!res.ok || !out?.success) throw new Error(out?.error ?? `HTTP ${res.status}`);
+}
+
+async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
   const form = new URLSearchParams({
-    From: env.TWILIO_WHATSAPP_FROM!,
-    To: `whatsapp:${to}`,
+    From: env.TWILIO_SMS_FROM!,
+    To: to,
     Body: body,
   });
   const res = await fetch(url, {
@@ -237,9 +278,9 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     .slice(0, 3)
     .map((c: { name?: unknown; phone?: unknown }) => ({
       name: cleanText(c?.name, 30),
-      phone: cleanText(c?.phone, 20).replace(/[\s()-]/g, ""),
+      phone: normalisePhone(c?.phone),
     }))
-    .filter((c: Contact) => /^\+[1-9]\d{7,14}$/.test(c.phone));
+    .filter((c): c is Contact => Boolean(c.phone));
 
   const id = randomId();
   const ownerKey = randomHex(32);
@@ -274,20 +315,31 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     minute: "2-digit",
     timeZone: "Europe/London",
   });
-  const walk = metres != null ? ` (${metres}m · ${Math.max(1, Math.round(metres / 1.33 / 60))} min walk)` : "";
+  const walk = metres != null ? `, ${metres}m / ${Math.max(1, Math.round(metres / 1.33 / 60))} min` : "";
+  // Kept short on purpose: every extra line is another 160-character segment.
   const message =
-    `EMERGENCY ALERT from ${ownerName}: Safe Haven mode activated at ${time}.\n` +
-    `Current location: https://maps.google.com/?q=${origin.lat.toFixed(5)},${origin.lon.toFixed(5)}\n` +
-    `Heading to: ${targetName}${walk}\n` +
-    `Live tracking: ${trackUrl}`;
+    `SafeStride ALERT ${time}: ${ownerName} needs help at ` +
+    `https://maps.google.com/?q=${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} ` +
+    `Walking to ${targetName}${walk}. Live: ${trackUrl}`;
 
-  const configured = Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_WHATSAPP_FROM);
+  if (contacts.length === 0) {
+    return json({ error: "no_valid_contacts" }, 400);
+  }
+
+  // The free Textbelt key refuses messages containing URLs, so that path gets
+  // a link-free alert (coordinates only) instead of losing the whole text.
+  const smsBody = onFreeTextbelt(env)
+    ? `SafeStride ALERT ${time}: ${ownerName} needs help at ` +
+      `${origin.lat.toFixed(5)},${origin.lon.toFixed(5)} walking to ${targetName}.`
+    : message;
+
+  const configured = twilioReady(env) || Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
       contacts.map(async (c) => {
         try {
-          await sendWhatsApp(env, c.phone, message);
+          await sendSms(env, c.phone, smsBody);
           return { name: c.name, ok: true };
         } catch (e) {
           return { name: c.name, ok: false, error: (e as Error).message };
@@ -303,8 +355,10 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     message,
     expiresAt: record.expiresAt,
     dispatch: {
-      mode: configured ? "whatsapp" : "manual",
+      mode: configured ? "sms" : "manual",
+      provider: twilioReady(env) ? "twilio" : env.TEXTBELT_KEY ? "textbelt" : null,
       results,
+      configured,
     },
   });
 }

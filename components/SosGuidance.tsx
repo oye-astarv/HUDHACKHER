@@ -53,15 +53,15 @@ export default function SosGuidance({
     if (state.phase === "failed") return { title: "Alert not sent", sub: state.error };
     const { alert } = state;
     const sent = alert.dispatch.results.filter((r) => r.ok).map((r) => r.name);
-    if (alert.dispatch.mode === "whatsapp" && sent.length > 0) {
-      return { title: "Alert Active · Live location shared", sub: `WhatsApp sent to ${joinNames(sent)}` };
+    if (alert.dispatch.mode === "sms" && sent.length > 0) {
+      return { title: "Alert Active · Live location shared", sub: `Texted ${joinNames(sent)}` };
     }
     return {
       title: "Alert Active · Live location streaming",
       sub:
         alert.dispatch.mode === "manual"
-          ? "Automatic WhatsApp not set up — tap Share alert below"
-          : "WhatsApp failed — tap Share alert below",
+          ? "No SMS account on the server — tap Send alert below"
+          : "SMS failed — tap Send alert below",
     };
   })();
 
@@ -160,16 +160,16 @@ export default function SosGuidance({
 
           {state.phase === "active" && (
             <section className="space-y-2 border border-edge bg-panel p-3">
-              {failed.length > 0 && state.alert.dispatch.mode === "whatsapp" && (
+              {failed.length > 0 && state.alert.dispatch.mode === "sms" && (
                 <p className="text-[11px] text-amber-300">
-                  Couldn&apos;t WhatsApp {joinNames(failed.map((f) => f.name))}: {failed[0].error}
+                  Couldn&apos;t text {joinNames(failed.map((f) => f.name))}: {failed[0].error}
                 </p>
               )}
               <button
                 onClick={onShareManual}
                 className={`w-full py-3 text-sm font-bold ${needsManual ? "bg-safe text-ink" : "border border-edge text-slate-200"}`}
               >
-                Share alert {needsManual ? "now" : "again"} (WhatsApp / SMS)
+                Send alert {needsManual ? "now" : "again"} by SMS
               </button>
               <p className="truncate text-center font-mono text-[10px] text-slate-500">{state.alert.trackUrl}</p>
             </section>
