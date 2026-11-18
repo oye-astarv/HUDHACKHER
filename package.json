@@ -8,7 +8,7 @@
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "data:graph": "node scripts/build-data.mjs",
-    "data:news": "node scripts/fetch-news.mjs"
+    "data:news": "node --env-file-if-exists=.env scripts/fetch-news.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
