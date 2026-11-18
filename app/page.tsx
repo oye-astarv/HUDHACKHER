@@ -10,6 +10,7 @@ import { DEMO_CENTRE, PRESETS } from "@/lib/presets";
 import { computeRoutes, nearestHaven, routeTo } from "@/lib/routing";
 import ContactsSetup from "@/components/ContactsSetup";
 import {
+  fetchSession,
   loadAlert,
   loadProfile,
   pushPoint,
@@ -55,6 +56,7 @@ export default function Page() {
   const [alert, setAlert] = useState<ActiveAlert | null>(null);
   const [sending, setSending] = useState(false);
   const [dispatchNote, setDispatchNote] = useState<string | null>(null);
+  const [shareNeeded, setShareNeeded] = useState(false);
   const [pinPrompt, setPinPrompt] = useState(false);
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
@@ -68,8 +70,20 @@ export default function Page() {
     // created server-side so the SMS can actually be sent.
     const savedProfile = loadProfile();
     setProfile(savedProfile);
-    setAlert(loadAlert());
     setSetupOpen(!savedProfile);
+
+    // A stored alert may have been ended or expired on another visit. Trust
+    // the server over localStorage, so a stale one can't block a new SOS.
+    const savedAlert = loadAlert();
+    if (savedAlert) {
+      setAlert(savedAlert);
+      void fetchSession(savedAlert.id).then(({ status, body }) => {
+        if (status !== 200 || body.status !== "active") {
+          saveAlert(null);
+          setAlert(null);
+        }
+      });
+    }
 
     loadData()
       .then(setBundle)
@@ -308,9 +322,11 @@ export default function Page() {
           ? `Texted ${sent} of ${profile.contacts.length} contact${
               profile.contacts.length === 1 ? "" : "s"
             } with your location${failed ? `, ${failed} failed` : ""}.`
-          : "SMS is not configured on the server yet — share the alert below."
+          : "SMS is not configured on the server yet — send it from this phone."
       );
-      if (created.dispatch.mode !== "sms") void shareManually(created, profile.contacts[0]?.phone);
+      // Never jump to the messaging app on its own: that would take the SOS
+      // screen away at the worst possible moment. Offer it as a button.
+      setShareNeeded(created.dispatch.mode !== "sms" || failed > 0);
 
       if (navigator.geolocation) {
         watchRef.current = navigator.geolocation.watchPosition(
@@ -325,6 +341,10 @@ export default function Page() {
       setSending(false);
     }
   }, [sos, profile, preset, keepAwake]);
+
+  const shareNow = useCallback(() => {
+    if (alert) void shareManually(alert, profile?.contacts[0]?.phone);
+  }, [alert, profile]);
 
   const resolveSafe = useCallback(async () => {
     if (!alert) return;
@@ -347,6 +367,12 @@ export default function Page() {
       wakeRef.current = null;
       setPinPrompt(false);
       setPin("");
+      // Drop the finished session from state *and* storage, otherwise the next
+      // SOS press reopens the old alert instead of offering a new one.
+      setAlert(null);
+      saveAlert(null);
+      setDispatchNote(null);
+      setShareNeeded(false);
       setSos(null);
       setToast("Marked safe. Your contacts can see you are safe.");
     } catch (err) {
@@ -528,6 +554,7 @@ export default function Page() {
               profile={profile}
               sos={sos}
               dispatchNote={dispatchNote}
+              shareNeeded={shareNeeded}
               sending={sending}
               pinPrompt={pinPrompt}
               pin={pin}
@@ -536,6 +563,7 @@ export default function Page() {
               onStart={startAlert}
               onResolve={() => setPinPrompt(true)}
               onConfirm={resolveSafe}
+              onShare={shareNow}
               onEditContacts={() => setSetupOpen(true)}
             />
           ) : (
@@ -712,6 +740,7 @@ function SosPanel({
   profile,
   sos,
   dispatchNote,
+  shareNeeded,
   sending,
   pinPrompt,
   pin,
@@ -720,12 +749,14 @@ function SosPanel({
   onStart,
   onResolve,
   onConfirm,
+  onShare,
   onEditContacts,
 }: {
   alert: ActiveAlert | null;
   profile: Profile | null;
   sos: { venue: Venue; metres: number; coords: [number, number][] };
   dispatchNote: string | null;
+  shareNeeded: boolean;
   sending: boolean;
   pinPrompt: boolean;
   pin: string;
@@ -734,6 +765,7 @@ function SosPanel({
   onStart: () => void;
   onResolve: () => void;
   onConfirm: () => void;
+  onShare: () => void;
   onEditContacts: () => void;
 }) {
   const minutes = Math.max(1, Math.round(sos.metres / 1.33 / 60));
@@ -821,6 +853,14 @@ function SosPanel({
           <code className="block truncate rounded-md border border-edge/80 bg-ink px-2 py-1.5 text-[10px] text-slate-400">
             {alert.trackUrl}
           </code>
+          {shareNeeded && (
+            <button
+              onClick={onShare}
+              className="w-full rounded-card border border-safe/40 bg-safe/[0.08] py-2.5 text-[13px] font-semibold text-safe transition active:scale-[0.99]"
+            >
+              Send it from this phone
+            </button>
+          )}
           <button
             onClick={onResolve}
             className="w-full rounded-card border border-edge/80 py-2.5 text-[13px] font-semibold text-slate-200 transition hover:bg-white/[0.03]"
