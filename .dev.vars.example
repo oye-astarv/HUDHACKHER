@@ -1,0 +1,14 @@
+# Copy to .dev.vars (never commit it) and fill in your own values.
+# Used by `wrangler dev`. For production use `npx wrangler secret put NAME`.
+
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+# The sandbox number from Twilio Console > Messaging > Try it out > Send a WhatsApp message
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+
+# Origin put into the tracking link sent to contacts.
+# Locally: http://localhost:3000 (or http://<your-laptop-LAN-IP>:3000 for a second phone)
+PUBLIC_ORIGIN=http://localhost:3000
+
+# Only used by `npm run data:news` (node script, reads process.env)
+GROQ_API_KEY=your_new_groq_key

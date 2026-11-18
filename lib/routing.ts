@@ -104,10 +104,6 @@ function auditRoute(
     else if (light === LIGHT.CLASS_PRIOR) inferred += len;
     else if (light === LIGHT.UNKNOWN) unknown += len;
 
-    const [mLon, mLat] = [0, 0];
-    void mLon;
-    void mLat;
-
     const mid = g.edgeMid[ei];
     for (let vi = 0; vi < venues.length; vi++) {
       if (nearVenues.has(vi)) continue;

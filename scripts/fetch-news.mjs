@@ -2,15 +2,15 @@
 /**
  * SafeStride incident pipeline.
  *
- *   RSS feeds → (Gemini structured extraction | keyword heuristic) → Nominatim
+ *   RSS feeds → (Groq LLM structured extraction | keyword heuristic) → Photon/Nominatim
  *   → public/data/incidents.json
  *
  * Runs entirely locally so the demo never scrapes live at request time. If
- * GEMINI_API_KEY is set the LLM does the street extraction; otherwise a
+ * GROQ_API_KEY is set the LLM does the street extraction; otherwise a
  * conservative keyword + street-name matcher does it, which is enough to demo
  * the detour behaviour.
  *
- *   GEMINI_API_KEY=... node scripts/fetch-news.mjs
+ *   npm run data:news        (reads GROQ_API_KEY from .dev.vars if present)
  */
 
 import fs from "node:fs/promises";
@@ -18,8 +18,8 @@ import path from "node:path";
 
 const OUT_DIR = path.join(process.cwd(), "public", "data");
 const UA = "SafeStride/0.1 (night-time pedestrian safety demo; contact: demo@example.org)";
-const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GROQ_KEY = process.env.GROQ_API_KEY;
+const MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
 const FEEDS = [
   {
@@ -108,7 +108,7 @@ function heuristic(item) {
   };
 }
 
-async function geminiExtract(item) {
+async function llmExtract(item) {
   const prompt = `You extract pedestrian safety incidents from UK local news.
 Return ONLY JSON matching this shape:
 {"is_pedestrian_safety_relevant":boolean,"category":"Police Cordon"|"Assault"|"Anti-Social Behaviour"|"Hazard","street_or_landmark":string,"one_line_summary":string}
@@ -117,21 +117,21 @@ Use a real street or landmark in or near Huddersfield, UK if one is named. If no
 Headline: ${item.title}
 Summary: ${item.description}`;
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0 },
-      }),
-    }
-  );
-  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`);
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_KEY}` },
+    body: JSON.stringify({
+      model: MODEL,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`Groq HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const json = await res.json();
-  const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned no text");
+  const text = json.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Groq returned no text");
+  await sleep(2100); // stay under the free-tier requests-per-minute limit
   return { ...JSON.parse(text), confidence: "llm" };
 }
 
@@ -186,7 +186,7 @@ async function geocode(query) {
 }
 
 async function main() {
-  console.log(`SafeStride news pipeline · extraction=${GEMINI_KEY ? MODEL : "heuristic"}`);
+  console.log(`SafeStride news pipeline · extraction=${GROQ_KEY ? MODEL : "heuristic"}`);
 
   const items = [];
   for (const feed of FEEDS) {
@@ -205,11 +205,11 @@ async function main() {
     seen.add(key);
 
     let extracted = null;
-    if (GEMINI_KEY) {
+    if (GROQ_KEY) {
       try {
-        extracted = await geminiExtract(item);
+        extracted = await llmExtract(item);
       } catch (err) {
-        console.warn(`  ! gemini: ${err.message}`);
+        console.warn(`  ! groq: ${err.message}`);
         extracted = heuristic(item);
       }
     } else {

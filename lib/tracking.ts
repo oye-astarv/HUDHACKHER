@@ -1,119 +1,149 @@
 "use client";
 
+/**
+ * Client side of the emergency loop: the user's profile (name, trusted
+ * contacts, Safety PIN verifier) lives in localStorage; live sessions live in
+ * the Cloudflare Durable Object behind /api.
+ */
+
+export type Contact = { name: string; phone: string };
+
+export type Profile = {
+  ownerName: string;
+  contacts: Contact[];
+  /** sha256("safestride-pin:" + PIN). The PIN itself is never stored. */
+  pinVerifier: string;
+};
+
+export type ActiveAlert = {
+  id: string;
+  ownerKey: string;
+  trackUrl: string;
+  message: string;
+  startedAt: string;
+  target: { name: string; lat: number; lon: number; metres: number };
+  dispatch: { mode: "whatsapp" | "manual"; results: { name: string; ok: boolean; error?: string }[] };
+};
+
 export type TrackPoint = { lat: number; lon: number; ts: number };
 
-export type TrackSession = {
-  token: string;
+export type PublicSession = {
+  id: string;
   createdAt: string;
+  expiresAt: string;
   status: "active" | "safe";
   ownerName: string;
+  contactNames: string[];
   target: { name: string; lat: number; lon: number };
   last: TrackPoint | null;
   trail: TrackPoint[];
-  pinHash: string | null;
+  resolvedAt: string | null;
 };
 
-const PREFIX = "safestride:session:";
-const EVENT = "safestride:session-updated";
+const PROFILE_KEY = "safestride:profile";
+const ALERT_KEY = "safestride:active-alert";
 
-export async function sha256(input: string): Promise<string> {
-  const data = new TextEncoder().encode(input);
+function readLS<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLS(key: string, value: unknown) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // private mode / storage blocked — the session still works for this page
+  }
+}
+
+export const loadProfile = () => readLS<Profile>(PROFILE_KEY);
+export const saveProfile = (p: Profile) => writeLS(PROFILE_KEY, p);
+export const loadAlert = () => readLS<ActiveAlert>(ALERT_KEY);
+export const saveAlert = (a: ActiveAlert | null) => writeLS(ALERT_KEY, a);
+
+export async function pinVerifier(pin: string): Promise<string> {
+  const data = new TextEncoder().encode(`safestride-pin:${pin}`);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
-export function newToken(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes)
-    .map((b) => b.toString(36).padStart(2, "0"))
-    .join("")
-    .slice(0, 32);
+/** UK-friendly: "07700 900123" -> "+447700900123". Returns null if invalid. */
+export function normalisePhone(input: string): string | null {
+  let p = input.replace(/[\s()-]/g, "");
+  if (p.startsWith("00")) p = "+" + p.slice(2);
+  if (/^0\d{9,10}$/.test(p)) p = "+44" + p.slice(1);
+  return /^\+[1-9]\d{7,14}$/.test(p) ? p : null;
 }
 
-export function saveSession(session: TrackSession): void {
-  localStorage.setItem(PREFIX + session.token, JSON.stringify(session));
-  window.dispatchEvent(new CustomEvent(EVENT, { detail: session.token }));
+async function api<T>(path: string, init?: RequestInit): Promise<{ status: number; body: T }> {
+  const res = await fetch(path, {
+    ...init,
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    cache: "no-store",
+  });
+  const body = (await res.json().catch(() => ({}))) as T;
+  return { status: res.status, body };
 }
 
-export function readSession(token: string): TrackSession | null {
-  try {
-    const raw = localStorage.getItem(PREFIX + token);
-    return raw ? (JSON.parse(raw) as TrackSession) : null;
-  } catch {
-    return null;
-  }
+export async function triggerEmergency(args: {
+  profile: Profile;
+  origin: { lat: number; lon: number };
+  target: { name: string; lat: number; lon: number; metres: number };
+}): Promise<ActiveAlert> {
+  const { status, body } = await api<Omit<ActiveAlert, "startedAt" | "target"> & { error?: string }>(
+    "/api/emergency/trigger",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        ownerName: args.profile.ownerName,
+        contacts: args.profile.contacts,
+        pinVerifier: args.profile.pinVerifier,
+        origin: args.origin,
+        target: args.target,
+      }),
+    }
+  );
+  if (status !== 200 || !body.id) throw new Error(body.error ?? `server error ${status}`);
+  return { ...body, startedAt: new Date().toISOString(), target: args.target };
 }
 
-export function pushPoint(token: string, point: TrackPoint): void {
-  const session = readSession(token);
-  if (!session || session.status !== "active") return;
-  session.last = point;
-  session.trail = [...session.trail.slice(-240), point];
-  saveSession(session);
+export async function pushPoint(alert: ActiveAlert, lat: number, lon: number) {
+  return api<{ result: string }>(`/api/track/${alert.id}`, {
+    method: "POST",
+    body: JSON.stringify({ ownerKey: alert.ownerKey, lat, lon }),
+  });
 }
 
-export function markSafe(token: string): void {
-  const session = readSession(token);
-  if (!session) return;
-  session.status = "safe";
-  saveSession(session);
-}
-
-/**
- * Subscribes to session changes. The local driver uses storage events, which
- * reach other tabs on this device. Swapping in a Cloudflare Durable Object
- * broadcast means implementing this same signature against a WebSocket.
- */
-export function subscribe(token: string, onChange: (s: TrackSession | null) => void) {
-  const emit = () => onChange(readSession(token));
-
-  const onStorage = (e: StorageEvent) => {
-    if (e.key === PREFIX + token) emit();
-  };
-  const onCustom = (e: Event) => {
-    if ((e as CustomEvent).detail === token) emit();
-  };
-
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(EVENT, onCustom);
-
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(EVENT, onCustom);
-  };
-}
-
-export function trackUrl(token: string): string {
-  return `${window.location.origin}/track/${token}`;
-}
-
-export function alertText(session: TrackSession): string {
-  const where = session.last
-    ? `https://maps.google.com/?q=${session.last.lat.toFixed(5)},${session.last.lon.toFixed(5)}`
-    : "location shared shortly";
-  return (
-    `EMERGENCY ALERT from ${session.ownerName}: Safe Haven mode activated.\n` +
-    `Current location: ${where}\n` +
-    `Heading to: ${session.target.name}\n` +
-    `Live tracking: ${trackUrl(session.token)}`
+export async function resolveAlert(alert: ActiveAlert, pin: string) {
+  return api<{ ok: boolean; error?: string; retryAfterS?: number; left?: number }>(
+    `/api/track/${alert.id}/resolve`,
+    {
+      method: "POST",
+      body: JSON.stringify({ ownerKey: alert.ownerKey, pinVerifier: await pinVerifier(pin) }),
+    }
   );
 }
 
-export async function shareAlert(session: TrackSession): Promise<string> {
-  const text = alertText(session);
-  const url = trackUrl(session.token);
+export async function fetchSession(id: string) {
+  return api<PublicSession & { error?: string }>(`/api/track/${id}`);
+}
 
+/** Manual fallback when WhatsApp isn't configured or a send failed. */
+export async function shareManually(alert: ActiveAlert): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.share) {
     try {
-      await navigator.share({ title: "SafeStride emergency alert", text, url });
-      return "shared";
+      await navigator.share({ title: "SafeStride emergency alert", text: alert.message });
+      return;
     } catch {
-      // user dismissed the sheet — fall through to SMS
+      // dismissed — fall through to WhatsApp link
     }
   }
-  window.location.href = `sms:?&body=${encodeURIComponent(text)}`;
-  return "sms";
+  window.location.href = `https://wa.me/?text=${encodeURIComponent(alert.message)}`;
 }

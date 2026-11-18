@@ -5,23 +5,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#070B12",
-        panel: "#0D131D",
-        edge: "#1B2634",
-        safe: "#14B8A6",
-        fast: "#EF4444",
+        ink: "#0E0E10",
+        panel: "#17171A",
+        edge: "#2A2A2E",
+        safe: "#4ADE80",
+        fast: "#9CA3AF",
+        alarm: "#D92D2D",
         warn: "#F59E0B",
-        haven: "#22C55E",
+        haven: "#4ADE80",
       },
       fontFamily: {
-        sans: [
-          "-apple-system",
-          "BlinkMacSystemFont",
-          "Segoe UI",
-          "Inter",
-          "Roboto",
-          "sans-serif",
-        ],
+        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
       },
     },
   },
