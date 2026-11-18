@@ -2,12 +2,23 @@
  {
   "category": "Assault",
   "street": "Huddersfield town centre",
-  "summary": "Police make arrest and appeal for information following Huddersfield sexual assaults - West Yorkshire Police",
+  "summary": "Police arrest and appeal for information following sexual assaults in Huddersfield.",
   "lat": 53.6417151,
   "lon": -1.7878878,
   "publishedAt": "2026-11-11T16:04:33.000Z",
   "url": "https://news.google.com/rss/articles/CBMiyAFBVV95cUxPdEpYOVZKOFdkV3BQUXZYYWMwYUxydHp6NnJXVUVrNDN4SWFXdEJDN2J1anJDM3ZCZFQ1VHZkSGYzb3Q0aVJiUU9ZQzRESm5OaGEwZHhKME1rN3MwUjg4dGJ4S3FXRHdaZnRPMy1rTk1zbENVb0RyOUpKczd2bUVyTkRzYVVKUUlXWjRvS3AzMVFyYUl5VE40b2s5VHlMLVh2Y0dwQlJpb0g0WmNTRmFhWkh0el9va0h4RUl0R3k0SXhXcFdvMzYtTw?oc=5",
   "source": "Google News · Huddersfield safety",
-  "confidence": "heuristic"
+  "confidence": "llm"
+ },
+ {
+  "category": "Assault",
+  "street": "Huddersfield University",
+  "summary": "Man arrested after seven women report being sexually assaulted around Huddersfield University - The Tab",
+  "lat": 53.6429919,
+  "lon": -1.7780783,
+  "publishedAt": "2026-11-12T15:57:47.000Z",
+  "url": "https://news.google.com/rss/articles/CBMiwAFBVV95cUxOMm5lYXh5V0FXS2Fvbmo3QUlra240eEVGVVdlY202SWduckpQd2MwTXBXTGx3NWVkTmtwRmlmbGlfdE42dlhuMW5OWXNIVU9zYjVUZTRfeDFFZ1dvQmdKNkN6cm53R3RfV01hMmtjQW5jenFaV2phNFY4NURkMFE4bnBuYUdKNkkwWGQ3dUZXZEtGQWoxNUpLX0dkU0ZoNlNBYU84SVhVRUdscTBJOWM4aE1lUFBPd2RfaDBXZjdzanE?oc=5",
+  "source": "Google News · Huddersfield safety",
+  "confidence": "llm"
  }
 ]

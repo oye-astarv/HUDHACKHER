@@ -26,6 +26,10 @@ const GROQ_KEY = process.env.GROQ_API_KEY;
 // is the cheap production model that still supports JSON object mode.
 const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+// The free tier is 8k tokens/minute, so headlines go up in batches instead of
+// one request each (45 separate calls bursts straight through the cap).
+const BATCH_SIZE = 8;
+const RETRY_LIMIT = 4;
 
 const FEEDS = [
   {
@@ -114,39 +118,73 @@ function heuristic(item) {
   };
 }
 
-async function llmExtract(item) {
-  const prompt = `You extract pedestrian safety incidents from UK local news.
-Return ONLY a JSON object matching this shape:
-{"is_pedestrian_safety_relevant":boolean,"category":"Police Cordon"|"Assault"|"Anti-Social Behaviour"|"Hazard","street_or_landmark":string,"one_line_summary":string}
-Use a real street or landmark in or near Huddersfield, UK if one is named. If no street is named, use "Huddersfield town centre". Set is_pedestrian_safety_relevant false for sport, business, entertainment or national news.
+/** One chat completion, honouring Groq's retry-after on 429 instead of guessing. */
+async function callGroq(prompt, maxTokens) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${GROQ_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "user", content: prompt }],
+        // JSON object mode returns valid JSON syntax; the prompt pins the shape.
+        response_format: { type: "json_object" },
+        // gpt-oss is a reasoning model: default effort burns the TPM budget on
+        // thinking. Extraction needs none of that.
+        reasoning_effort: "low",
+        temperature: 0,
+        max_completion_tokens: maxTokens,
+      }),
+    });
 
-Headline: ${item.title}
-Summary: ${item.description}`;
+    if (res.ok) {
+      const json = await res.json();
+      const text = json.choices?.[0]?.message?.content;
+      if (!text) throw new Error("Groq returned no text");
+      // Models sometimes wrap JSON in a fenced block even in JSON mode.
+      return text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
+    }
 
-  const res = await fetch(GROQ_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${GROQ_KEY}`,
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      messages: [{ role: "user", content: prompt }],
-      // JSON object mode returns valid JSON syntax; the prompt pins the shape.
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_completion_tokens: 1024,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Groq HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+    const body = (await res.text()).slice(0, 200);
+    if (res.status === 429 && attempt < RETRY_LIMIT) {
+      const wait = Number(res.headers.get("retry-after")) || 5 * 2 ** attempt;
+      console.warn(`    … rate limited, waiting ${wait}s`);
+      await sleep(wait * 1000);
+      continue;
+    }
+    throw new Error(`Groq HTTP ${res.status} ${body}`);
   }
-  const json = await res.json();
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) throw new Error("Groq returned no text");
-  // Models sometimes wrap JSON in a fenced block even in JSON mode.
-  const bare = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "");
-  return { ...JSON.parse(bare), confidence: "llm" };
+}
+
+/** Extract one batch of headlines in a single request; returns rows aligned to input order. */
+async function llmExtractBatch(batch) {
+  const list = batch.map((item, i) => ({
+    i,
+    headline: item.title.slice(0, 180),
+    summary: item.description.slice(0, 320),
+  }));
+
+  const prompt = `You extract pedestrian safety incidents from UK local news.
+Return ONLY a JSON object of this shape:
+{"items":[{"i":0,"is_pedestrian_safety_relevant":true,"category":"Police Cordon","street_or_landmark":"string","one_line_summary":"string"}]}
+Include one entry for EVERY input item, reusing its "i" value. category must be exactly one of "Police Cordon", "Assault", "Anti-Social Behaviour", "Hazard".
+Use a real street or landmark in or near Huddersfield, UK when one is named; otherwise use "Huddersfield town centre".
+Set is_pedestrian_safety_relevant false for sport, business, entertainment or national news.
+
+Items: ${JSON.stringify(list)}`;
+
+  const text = await callGroq(prompt, 1600);
+  const parsed = JSON.parse(text);
+  const rows = Array.isArray(parsed.items) ? parsed.items : [];
+
+  return batch.map((item, i) => {
+    const row = rows.find((r) => Number(r?.i) === i);
+    if (!row?.is_pedestrian_safety_relevant) return null;
+    return { ...row, confidence: "llm" };
+  });
 }
 
 function inArea(lat, lon) {
@@ -214,27 +252,39 @@ async function main() {
   }
 
   const seen = new Set();
-  const candidates = [];
+  const unique = [];
   for (const item of items) {
     const key = item.title.toLowerCase().slice(0, 80);
     if (seen.has(key)) continue;
     seen.add(key);
+    unique.push(item);
+  }
 
-    let extracted = null;
+  const candidates = [];
+  for (let start = 0; start < unique.length; start += BATCH_SIZE) {
+    const batch = unique.slice(start, start + BATCH_SIZE);
+
+    let rows;
     if (GROQ_KEY) {
       try {
-        extracted = await llmExtract(item);
+        rows = await llmExtractBatch(batch);
       } catch (err) {
-        console.warn(`  ! groq: ${err.message}`);
-        extracted = heuristic(item);
+        console.warn(`  ! groq: ${err.message} — heuristic for this batch of ${batch.length}`);
+        rows = batch.map(heuristic);
       }
     } else {
-      extracted = heuristic(item);
+      rows = batch.map(heuristic);
     }
 
-    if (!extracted?.is_pedestrian_safety_relevant) continue;
-    if (!extracted.street_or_landmark) continue;
-    candidates.push({ item, extracted });
+    batch.forEach((item, i) => {
+      const extracted = rows[i];
+      if (!extracted?.is_pedestrian_safety_relevant) return;
+      if (!extracted.street_or_landmark) return;
+      candidates.push({ item, extracted });
+    });
+
+    // Stay under the tokens-per-minute window between batches.
+    if (GROQ_KEY && start + BATCH_SIZE < unique.length) await sleep(3000);
   }
 
   console.log(`  ${candidates.length} safety-relevant candidates`);
