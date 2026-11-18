@@ -18,19 +18,27 @@ const C = {
   fast: "#D4715B",
   haven: "#9AD6C0",
   warn: "#C9A227",
+  trail: "#6E9BC4",
   ink: "#0A0C0F",
   muted: "#8A93A0",
 };
 
+type Labelled = { venue: Venue; metres: number; note: string };
+
 type Props = {
   centre: [number, number];
-  fastest: RouteResult | null;
-  safe: RouteResult | null;
-  venues: Venue[];
-  incidents: Incident[];
-  sos: { coords: [number, number][]; venue: Venue } | null;
-  walk: [number, number] | null;
-  onPick: (lat: number, lon: number) => void;
+  fastest?: RouteResult | null;
+  safe?: RouteResult | null;
+  venues?: Venue[];
+  incidents?: Incident[];
+  sos?: { coords: [number, number][]; venue: Venue } | null;
+  walk?: [number, number] | null;
+  /** Follower view: everywhere the alert has been. */
+  trail?: [number, number][];
+  /** Follower view: the safe haven being walked to. */
+  destination?: [number, number] | null;
+  labelled?: Labelled[];
+  onPick?: (lat: number, lon: number) => void;
 };
 
 function ClickToPick({ onPick }: { onPick: (lat: number, lon: number) => void }) {
@@ -42,11 +50,21 @@ function ClickToPick({ onPick }: { onPick: (lat: number, lon: number) => void })
   return null;
 }
 
-function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: RouteResult | null }) {
+function Fit({ fastest, safe, trail, destination }: {
+  fastest?: RouteResult | null;
+  safe?: RouteResult | null;
+  trail?: [number, number][];
+  destination?: [number, number] | null;
+}) {
   const map = useMap();
 
   useEffect(() => {
-    const coords = [...(fastest?.coords ?? []), ...(safe?.coords ?? [])];
+    const coords = [
+      ...(fastest?.coords ?? []),
+      ...(safe?.coords ?? []),
+      ...(trail ?? []),
+      ...(destination ? [destination] : []),
+    ];
     if (coords.length < 2) return;
     const lats = coords.map((c) => c[0]);
     const lons = coords.map((c) => c[1]);
@@ -55,17 +73,16 @@ function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: Route
         [Math.min(...lats), Math.min(...lons)],
         [Math.max(...lats), Math.max(...lons)],
       ],
-      // The bottom sheet covers most of the screen, so fit into the strip that
-      // is actually visible, and skip animation to avoid a Leaflet zoom
-      // transition outliving React's double-mount.
+      // Fit into the strip the bottom sheet leaves visible, and skip animation
+      // so a Leaflet zoom transition can't outlive React's double-mount.
       {
         paddingTopLeft: [28, 108],
-        paddingBottomRight: [28, Math.round(map.getSize().y * 0.58)],
+        paddingBottomRight: [28, Math.round(map.getSize().y * 0.3)],
         maxZoom: 17,
         animate: false,
       }
     );
-  }, [fastest, safe, map]);
+  }, [fastest, safe, trail, destination, map]);
 
   return null;
 }
@@ -74,10 +91,13 @@ export default function MapCanvas({
   centre,
   fastest,
   safe,
-  venues,
-  incidents,
+  venues = [],
+  incidents = [],
   sos,
   walk,
+  trail,
+  destination,
+  labelled = [],
   onPick,
 }: Props) {
   return (
@@ -88,9 +108,9 @@ export default function MapCanvas({
       attributionControl
       className="h-full w-full"
     >
-      {/* CARTO now serves "API KEY REQUIRED" placeholder tiles without a key,
-          so the basemap moved to Esri's keyless dark canvas. maxNativeZoom
-          keeps zooming past z16 by upscaling the last real tiles. */}
+      {/* CARTO serves "API KEY REQUIRED" placeholders without a key, so the
+          basemap is Esri's keyless dark canvas. maxNativeZoom keeps zooming
+          past z16 by upscaling the last real tiles. */}
       <TileLayer
         url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
         attribution="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
@@ -99,8 +119,8 @@ export default function MapCanvas({
         className="map-tiles"
       />
 
-      <ClickToPick onPick={onPick} />
-      <FitRoutes fastest={fastest} safe={safe} />
+      {onPick && <ClickToPick onPick={onPick} />}
+      <Fit fastest={fastest} safe={safe} trail={trail} destination={destination} />
 
       {/* A dark casing under each line keeps both readable over busy streets. */}
       {fastest && (
@@ -159,6 +179,14 @@ export default function MapCanvas({
         </>
       )}
 
+      {/* follower view: where the alert has already been */}
+      {trail && trail.length > 1 && (
+        <Polyline
+          positions={trail}
+          pathOptions={{ color: C.trail, weight: 2.5, opacity: 0.85, lineCap: "round" }}
+        />
+      )}
+
       {walk && (
         <>
           <CircleMarker
@@ -195,6 +223,27 @@ export default function MapCanvas({
             <br />
             {v.hours}
             {v.assumed ? " (hours assumed)" : ""}
+          </Tooltip>
+        </CircleMarker>
+      ))}
+
+      {destination && (
+        <CircleMarker
+          center={destination}
+          radius={9}
+          pathOptions={{ color: C.haven, weight: 1.5, fillOpacity: 0.15, fillColor: C.haven }}
+        />
+      )}
+
+      {labelled.map((l, i) => (
+        <CircleMarker
+          key={`labelled-${l.venue.name}-${i}`}
+          center={[l.venue.lat, l.venue.lon]}
+          radius={7}
+          pathOptions={{ color: C.haven, weight: 1.5, fillOpacity: 0.2, fillColor: C.haven }}
+        >
+          <Tooltip permanent direction="top">
+            {l.venue.name}
           </Tooltip>
         </CircleMarker>
       ))}

@@ -8,15 +8,18 @@ import { distanceM, pointAlong, polylineLength } from "@/lib/geo";
 import { prepare } from "@/lib/graph";
 import { DEMO_CENTRE, PRESETS } from "@/lib/presets";
 import { computeRoutes, nearestHaven, routeTo } from "@/lib/routing";
+import ContactsSetup from "@/components/ContactsSetup";
 import {
-  markSafe,
-  newToken,
+  loadAlert,
+  loadProfile,
   pushPoint,
-  readSession,
-  saveSession,
-  sha256,
-  shareAlert,
-  type TrackSession,
+  resolveAlert,
+  saveAlert,
+  saveProfile,
+  shareManually,
+  triggerEmergency,
+  type ActiveAlert,
+  type Profile,
 } from "@/lib/tracking";
 import type { RouteAudit, RouteResult, Venue } from "@/lib/types";
 
@@ -47,7 +50,11 @@ export default function Page() {
     metres: number;
     coords: [number, number][];
   } | null>(null);
-  const [session, setSession] = useState<TrackSession | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [alert, setAlert] = useState<ActiveAlert | null>(null);
+  const [sending, setSending] = useState(false);
+  const [dispatchNote, setDispatchNote] = useState<string | null>(null);
   const [pinPrompt, setPinPrompt] = useState(false);
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
@@ -57,6 +64,13 @@ export default function Page() {
   const wakeRef = useRef<{ release: () => Promise<void> } | null>(null);
 
   useEffect(() => {
+    // Trusted contacts + Safety PIN live on this device; the alert itself is
+    // created server-side so the SMS can actually be sent.
+    const savedProfile = loadProfile();
+    setProfile(savedProfile);
+    setAlert(loadAlert());
+    setSetupOpen(!savedProfile);
+
     loadData()
       .then(setBundle)
       .catch((err) => setLoadError(err.message));
@@ -187,8 +201,8 @@ export default function Page() {
         setToast(`${reason} — no open safe haven found nearby right now.`);
         return;
       }
-      if (session?.status === "active") {
-        pushPoint(session.token, { lat: from.lat, lon: from.lon, ts: Date.now() });
+      if (alert) {
+        void pushPoint(alert, from.lat, from.lon);
       }
       const minutes = Math.max(1, Math.round(haven.metres / 1.33 / 60));
       setToast(
@@ -197,20 +211,27 @@ export default function Page() {
         )} m (${minutes} min).`
       );
     },
-    [graph, bundle, walkPoint, preset, hour, session]
+    [graph, bundle, walkPoint, preset, hour, alert]
   );
 
   // 10% battery → ping a safe haven without the user touching anything.
+  // The callback goes through a ref so this subscription isn't torn down and
+  // rebuilt on every render (walkPoint is a fresh array each time).
+  const pingRef = useRef(pingSafeHaven);
+  useEffect(() => {
+    pingRef.current = pingSafeHaven;
+  }, [pingSafeHaven]);
+
   useEffect(() => {
     if (!graph || !bundle) return;
-    const onLow = () => pingSafeHaven("Battery at 10%");
+    const onLow = () => pingRef.current("Battery at 10%");
     const stopWatching = watchLowBattery(onLow);
     window.addEventListener("safestride:low-battery", onLow);
     return () => {
       stopWatching();
       window.removeEventListener("safestride:low-battery", onLow);
     };
-  }, [graph, bundle, pingSafeHaven]);
+  }, [graph, bundle]);
 
   // Hidden panic trigger: three quick presses of a panic key, or ⌘/Ctrl+Shift+S.
   // Browsers never deliver the power or volume rocker to a web page, but a
@@ -259,57 +280,81 @@ export default function Page() {
     triggerSos();
   }, [graph, bundle, triggerSos]);
 
+  /** Creates the session server-side and asks it to SMS the trusted contacts. */
   const startAlert = useCallback(async () => {
-    if (!sos) return;
-    const token = newToken();
-    const pinHash = await sha256("1234");
-    const track: TrackSession = {
-      token,
-      createdAt: new Date().toISOString(),
-      status: "active",
-      ownerName: "Sarah",
-      target: { name: sos.venue.name, lat: sos.venue.lat, lon: sos.venue.lon },
-      last: { lat: preset.from.lat, lon: preset.from.lon, ts: Date.now() },
-      trail: [],
-      pinHash,
-    };
-    saveSession(track);
-    setSession(track);
-    await keepAwake();
+    if (!sos || !profile) return;
+    setSending(true);
+    setDispatchNote(null);
+    try {
+      const from = { lat: preset.from.lat, lon: preset.from.lon };
+      const created = await triggerEmergency({
+        profile,
+        origin: from,
+        target: {
+          name: sos.venue.name,
+          lat: sos.venue.lat,
+          lon: sos.venue.lon,
+          metres: Math.round(sos.metres),
+        },
+      });
+      saveAlert(created);
+      setAlert(created);
+      await keepAwake();
 
-    if (navigator.geolocation) {
-      watchRef.current = navigator.geolocation.watchPosition(
-        (pos) =>
-          pushPoint(token, {
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude,
-            ts: Date.now(),
-          }),
-        () => undefined,
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      const sent = created.dispatch.results.filter((r) => r.ok).length;
+      const failed = created.dispatch.results.length - sent;
+      setDispatchNote(
+        created.dispatch.mode === "sms"
+          ? `Texted ${sent} of ${profile.contacts.length} contact${
+              profile.contacts.length === 1 ? "" : "s"
+            } with your location${failed ? `, ${failed} failed` : ""}.`
+          : "SMS is not configured on the server yet — share the alert below."
       );
+      if (created.dispatch.mode !== "sms") void shareManually(created);
+
+      if (navigator.geolocation) {
+        watchRef.current = navigator.geolocation.watchPosition(
+          (pos) => void pushPoint(created, pos.coords.latitude, pos.coords.longitude),
+          () => undefined,
+          { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+        );
+      }
+    } catch (err) {
+      setDispatchNote(`Could not reach the alert service: ${(err as Error).message}`);
+    } finally {
+      setSending(false);
     }
-    await shareAlert(track);
-  }, [sos, preset, keepAwake]);
+  }, [sos, profile, preset, keepAwake]);
 
   const resolveSafe = useCallback(async () => {
-    if (!session) return;
-    const hash = await sha256(pin);
-    if (session.pinHash && hash !== session.pinHash) {
-      setPinError("Incorrect PIN");
-      return;
-    }
-    markSafe(session.token);
-    setSession(readSession(session.token));
-    if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current);
-    await wakeRef.current?.release();
-    wakeRef.current = null;
-    setPinPrompt(false);
-    setPin("");
+    if (!alert) return;
+    setSending(true);
     setPinError(null);
-    setSos(null);
-    setToast("Marked safe. Contacts can see you are safe.");
-  }, [session, pin]);
+    try {
+      const { body } = await resolveAlert(alert, pin);
+      if (!body.ok) {
+        setPinError(
+          body.error === "locked"
+            ? `Too many attempts — try again in ${body.retryAfterS ?? 60}s.`
+            : body.error === "forbidden"
+              ? "This alert was started on another device."
+              : `Incorrect PIN${typeof body.left === "number" ? ` — ${body.left} tries left` : ""}`
+        );
+        return;
+      }
+      if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current);
+      await wakeRef.current?.release();
+      wakeRef.current = null;
+      setPinPrompt(false);
+      setPin("");
+      setSos(null);
+      setToast("Marked safe. Your contacts can see you are safe.");
+    } catch (err) {
+      setPinError(`Could not reach the alert service: ${(err as Error).message}`);
+    } finally {
+      setSending(false);
+    }
+  }, [alert, pin]);
 
   if (loadError) {
     return (
@@ -321,6 +366,26 @@ export default function Page() {
             Run <code className="text-safe">npm run data:graph</code> to build
             the Huddersfield graph, then reload.
           </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (setupOpen) {
+    return (
+      <main id="app-shell" className="overflow-y-auto px-4 pb-8 pt-[max(env(safe-area-inset-top),16px)]">
+        <div className="mx-auto max-w-md">
+          <ContactsSetup
+            profile={profile}
+            onboarding={!profile}
+            onSave={(next) => {
+              saveProfile(next);
+              setProfile(next);
+              setSetupOpen(false);
+              setToast(`Alerts will text ${next.contacts.map((c) => c.name).join(", ")}.`);
+            }}
+            onCancel={profile ? () => setSetupOpen(false) : undefined}
+          />
         </div>
       </main>
     );
@@ -459,8 +524,11 @@ export default function Page() {
         <div className="max-h-[50vh] overflow-y-auto px-3 pb-[max(env(safe-area-inset-bottom),12px)]">
           {sos ? (
             <SosPanel
-              session={session}
+              alert={alert}
+              profile={profile}
               sos={sos}
+              dispatchNote={dispatchNote}
+              sending={sending}
               pinPrompt={pinPrompt}
               pin={pin}
               pinError={pinError}
@@ -468,6 +536,7 @@ export default function Page() {
               onStart={startAlert}
               onResolve={() => setPinPrompt(true)}
               onConfirm={resolveSafe}
+              onEditContacts={() => setSetupOpen(true)}
             />
           ) : (
             <>
@@ -639,8 +708,11 @@ function WalkScrubber({
 }
 
 function SosPanel({
-  session,
+  alert,
+  profile,
   sos,
+  dispatchNote,
+  sending,
   pinPrompt,
   pin,
   pinError,
@@ -648,9 +720,13 @@ function SosPanel({
   onStart,
   onResolve,
   onConfirm,
+  onEditContacts,
 }: {
-  session: TrackSession | null;
+  alert: ActiveAlert | null;
+  profile: Profile | null;
   sos: { venue: Venue; metres: number; coords: [number, number][] };
+  dispatchNote: string | null;
+  sending: boolean;
   pinPrompt: boolean;
   pin: string;
   pinError: string | null;
@@ -658,6 +734,7 @@ function SosPanel({
   onStart: () => void;
   onResolve: () => void;
   onConfirm: () => void;
+  onEditContacts: () => void;
 }) {
   const minutes = Math.max(1, Math.round(sos.metres / 1.33 / 60));
 
@@ -681,12 +758,13 @@ function SosPanel({
         {pinError && <p className="text-[11px] text-fast">{pinError}</p>}
         <button
           onClick={onConfirm}
-          className="w-full rounded-lg bg-safe py-2.5 text-sm font-semibold text-ink"
+          disabled={sending}
+          className="w-full rounded-card bg-safe py-2.5 text-[13px] font-semibold text-ink disabled:opacity-60"
         >
-          I&apos;m safe
+          {sending ? "Checking…" : "I'm safe"}
         </button>
         <p className="text-[10px] text-slate-600">
-          Demo PIN for this draft is 1234.
+          This is the PIN you chose when you added your contacts.
         </p>
       </div>
     );
@@ -712,21 +790,36 @@ function SosPanel({
         </span>
       </div>
 
-      {!session ? (
-        <button
-          onClick={onStart}
-          className="w-full rounded-card bg-fast py-3 text-[13px] font-semibold text-white ring-1 ring-white/15 transition active:scale-[0.99]"
-        >
-          Alert my contacts &amp; share live location
-        </button>
+      {!alert ? (
+        <div className="space-y-2">
+          <button
+            onClick={onStart}
+            disabled={sending || !profile}
+            className="w-full rounded-card bg-fast py-3 text-[13px] font-semibold text-white ring-1 ring-white/15 transition active:scale-[0.99] disabled:opacity-60"
+          >
+            {sending ? "Sending the alert…" : "Text my contacts & share my location"}
+          </button>
+          <p className="text-[10px] leading-relaxed text-slate-500">
+            {profile
+              ? `An SMS with your live location goes to ${profile.contacts
+                  .map((c) => c.name)
+                  .join(", ")}.`
+              : "Add a trusted contact first — the alert reaches them by SMS."}
+            <button
+              onClick={onEditContacts}
+              className="ml-1 underline decoration-slate-600 underline-offset-2 hover:text-slate-300"
+            >
+              {profile ? "Edit contacts" : "Add a contact"}
+            </button>
+          </p>
+        </div>
       ) : (
         <div className="space-y-2">
           <p className="rounded-md border border-safe/25 bg-safe/[0.07] px-2 py-1.5 text-[10px] leading-relaxed text-safe">
-            Live link active{session.status === "safe" ? " — you are marked safe" : ""}. Share it
-            with a trusted contact:
+            {dispatchNote ?? "Alert sent."}
           </p>
           <code className="block truncate rounded-md border border-edge/80 bg-ink px-2 py-1.5 text-[10px] text-slate-400">
-            /track/{session.token}
+            {alert.trackUrl}
           </code>
           <button
             onClick={onResolve}
@@ -737,8 +830,8 @@ function SosPanel({
         </div>
       )}
       <p className="text-[10px] leading-relaxed text-slate-500">
-        Draft build: sessions live in this browser only. The Cloudflare Durable
-        Object broadcast is the next step, so a second phone can follow along.
+        Your PIN ends the alert; it never leaves this phone in the clear. Live
+        updates stop when you mark yourself safe, or 3 hours after the alert.
       </p>
     </div>
   );

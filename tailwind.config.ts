@@ -13,6 +13,7 @@ const config: Config = {
         safe: "#7FBFA8",
         fast: "#D4715B",
         warn: "#C9A227",
+        alarm: "#D92D2D",
         haven: "#9AD6C0",
         muted: "#8A93A0",
       },
