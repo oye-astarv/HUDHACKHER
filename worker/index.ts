@@ -25,11 +25,15 @@ export interface Env {
   TEXTBELT_KEY?: string;
   /** Override the Twilio API host. Only for pointing at a local mock in tests. */
   TWILIO_BASE_URL?: string;
+  /** Minutes between automatic position texts while an alert is active. */
+  SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
   PUBLIC_ORIGIN?: string;
 }
 
 const SESSION_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
+const DEFAULT_UPDATE_MINUTES = 10;
+const MAX_UPDATES = 12; // caps what one alert can spend on update texts
 const MAX_TRAIL = 240;
 const MAX_PIN_ATTEMPTS = 5;
 const PIN_LOCK_MS = 5 * 60 * 1000;
@@ -44,6 +48,11 @@ type Stored = {
   status: "active" | "safe";
   ownerName: string;
   contactNames: string[];
+  /** Kept for the life of the alert so the follow-up texts can reach them. */
+  contacts: Contact[];
+  trackUrl: string;
+  updateMinutes: number;
+  updatesSent: number;
   target: { name: string; lat: number; lon: number };
   last: Point | null;
   trail: Point[];
@@ -57,7 +66,7 @@ type Stored = {
 
 export type PublicSession = Omit<
   Stored,
-  "ownerKeyHash" | "pinSalt" | "pinHash" | "attempts" | "lockedUntil"
+  "ownerKeyHash" | "pinSalt" | "pinHash" | "attempts" | "lockedUntil" | "contacts"
 >;
 
 // ---------- helpers ----------
@@ -127,21 +136,84 @@ async function readJson(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
+/**
+ * The SOS SMS protocol. One alert is up to three kinds of text:
+ *   ALERT  — sent by trigger() the moment SOS is pressed
+ *   UPDATE — repeated by the session's own alarm while it stays active
+ *   SAFE   — sent by the resolve route when the Safety PIN ends the alert
+ * `plain` variants drop URLs for the free Textbelt key, which refuses links.
+ */
+function londonClock(ms: number): string {
+  return new Date(ms).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/London",
+  });
+}
+
+function metresBetween(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6371000;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+}
+
+function updateMessages(s: Stored, ms: number): { full: string; plain: string } {
+  const time = londonClock(ms);
+  const p = s.last;
+  const at = p ? `${p.lat.toFixed(5)},${p.lon.toFixed(5)}` : "an unknown position";
+  const away = p ? metresBetween(p, s.target) : null;
+  const near = away != null ? `, ${away}m from ${s.target.name}` : "";
+  return {
+    full: `SafeStride UPDATE ${time}: ${s.ownerName} is at ${at}${near}. Live: ${s.trackUrl}`,
+    plain: `SafeStride UPDATE ${time}: ${s.ownerName} is at ${at}${near}.`,
+  };
+}
+
+function safeMessages(
+  ownerName: string,
+  ms: number,
+  last: Point | null
+): { full: string; plain: string } {
+  const time = londonClock(ms);
+  const at = last ? ` near ${last.lat.toFixed(5)},${last.lon.toFixed(5)}` : "";
+  return {
+    full: `SafeStride SAFE ${time}: ${ownerName} marked themselves safe${at}. Live tracking has stopped.`,
+    plain: `SafeStride SAFE ${time}: ${ownerName} marked themselves safe${at}. Live tracking has stopped.`,
+  };
+}
+
+async function sendToContacts(
+  env: Env,
+  contacts: Contact[],
+  msg: { full: string; plain: string }
+): Promise<void> {
+  const body = onFreeTextbelt(env) ? msg.plain : msg.full;
+  await Promise.all(
+    contacts.map((c) => sendSms(env, c.phone, body).catch(() => undefined))
+  );
+}
+
 // ---------- Durable Object ----------
 
 export class TrackSession extends DurableObject<Env> {
   async init(record: Stored): Promise<boolean> {
     if (await this.ctx.storage.get("s")) return false;
     await this.ctx.storage.put("s", record);
-    await this.ctx.storage.setAlarm(Date.now() + SESSION_TTL_MS);
+    const firstUpdate = Date.now() + record.updateMinutes * 60_000;
+    await this.ctx.storage.setAlarm(Math.min(firstUpdate, Date.now() + SESSION_TTL_MS));
     return true;
   }
 
   async read(): Promise<PublicSession | null> {
     const s = await this.ctx.storage.get<Stored>("s");
     if (!s) return null;
-    const { ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, ...pub } = s;
-    void ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil;
+    const { ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, contacts, ...pub } = s;
+    void ownerKeyHash, pinSalt, pinHash, attempts, lockedUntil, contacts;
     return pub;
   }
 
@@ -156,10 +228,16 @@ export class TrackSession extends DurableObject<Env> {
     return "ok";
   }
 
-  async resolve(
-    ownerKey: string,
-    pinVerifier: string
-  ): Promise<{ ok: boolean; error?: string; retryAfterS?: number; left?: number }> {
+  async resolve(ownerKey: string, pinVerifier: string): Promise<{
+    ok: boolean;
+    error?: string;
+    retryAfterS?: number;
+    left?: number;
+    /** Present on a real transition, so the route can send the SAFE text. */
+    contacts?: Contact[];
+    ownerName?: string;
+    last?: Point | null;
+  }> {
     const s = await this.ctx.storage.get<Stored>("s");
     if (!s) return { ok: false, error: "gone" };
     if (!safeEqual(await sha256(ownerKey), s.ownerKeyHash)) return { ok: false, error: "forbidden" };
@@ -185,11 +263,35 @@ export class TrackSession extends DurableObject<Env> {
     s.resolvedAt = new Date(now).toISOString();
     s.attempts = 0;
     await this.ctx.storage.put("s", s);
-    return { ok: true };
+    await this.ctx.storage.deleteAlarm();
+    return { ok: true, contacts: s.contacts, ownerName: s.ownerName, last: s.last };
   }
 
+  /**
+   * Drives the UPDATE part of the protocol while an alert stays active, then
+   * wipes the session (and the stored contact numbers) when it expires.
+   */
   async alarm(): Promise<void> {
-    await this.ctx.storage.deleteAll();
+    const s = await this.ctx.storage.get<Stored>("s");
+    if (!s) return;
+
+    const expires = new Date(s.expiresAt).getTime();
+    if (Date.now() >= expires) {
+      await this.ctx.storage.deleteAll();
+      return;
+    }
+
+    if (s.status !== "active" || s.updateMinutes <= 0 || s.updatesSent >= MAX_UPDATES) {
+      await this.ctx.storage.setAlarm(expires);
+      return;
+    }
+
+    await sendToContacts(this.env, s.contacts, updateMessages(s, Date.now()));
+    s.updatesSent += 1;
+    await this.ctx.storage.put("s", s);
+    await this.ctx.storage.setAlarm(
+      Math.min(Date.now() + s.updateMinutes * 60_000, expires)
+    );
   }
 }
 
@@ -299,6 +401,14 @@ async function trigger(req: Request, env: Env): Promise<Response> {
   const pinSalt = randomHex(16);
   const now = Date.now();
 
+  const base = publicOrigin(req, env);
+  const trackUrl = `${base}/track/${id}`;
+  const parsedUpdates = Number(env.SMS_UPDATE_MINUTES);
+  const updateMinutes =
+    Number.isFinite(parsedUpdates) && parsedUpdates >= 0
+      ? Math.min(180, Math.floor(parsedUpdates))
+      : DEFAULT_UPDATE_MINUTES;
+
   const record: Stored = {
     id,
     createdAt: new Date(now).toISOString(),
@@ -306,6 +416,10 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     status: "active",
     ownerName,
     contactNames: contacts.map((c) => c.name || "contact"),
+    contacts,
+    trackUrl,
+    updateMinutes,
+    updatesSent: 0,
     target: { name: targetName, lat: target.lat, lon: target.lon },
     last: { lat: origin.lat, lon: origin.lon, ts: now },
     trail: [{ lat: origin.lat, lon: origin.lon, ts: now }],
@@ -320,8 +434,6 @@ async function trigger(req: Request, env: Env): Promise<Response> {
   const stub = env.TRACK.get(env.TRACK.idFromName(id));
   if (!(await stub.init(record))) return json({ error: "collision" }, 500);
 
-  const base = publicOrigin(req, env);
-  const trackUrl = `${base}/track/${id}`;
   const time = new Date(now).toLocaleTimeString("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
@@ -366,6 +478,7 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     trackUrl,
     message,
     expiresAt: record.expiresAt,
+    updatesMinutes: updateMinutes,
     dispatch: {
       mode: configured ? "sms" : "manual",
       provider: twilioReady(env) ? "twilio" : env.TEXTBELT_KEY ? "textbelt" : null,
@@ -398,8 +511,16 @@ async function trackRoute(req: Request, env: Env, id: string, action: string | u
 
   if (action === "resolve") {
     const r = await stub.resolve(ownerKey, cleanText(body?.pinVerifier, 128));
+    // Close the loop with the contacts: the alert ends with an explicit SAFE.
+    if (r.ok && r.contacts?.length) {
+      await sendToContacts(
+        env,
+        r.contacts,
+        safeMessages(r.ownerName ?? "The SafeStride user", Date.now(), r.last ?? null)
+      );
+    }
     const status = r.ok ? 200 : r.error === "forbidden" ? 403 : r.error === "gone" ? 404 : r.error === "locked" ? 429 : 401;
-    return json(r, status);
+    return json({ ok: r.ok, error: r.error, retryAfterS: r.retryAfterS, left: r.left }, status);
   }
 
   return json({ error: "not_found" }, 404);

@@ -8,6 +8,10 @@ TWILIO_AUTH_TOKEN=your_twilio_auth_token
 # Trial accounts can only text numbers you have verified in the console.
 TWILIO_SMS_FROM=+447700900123
 
+# Minutes between automatic UPDATE texts while an alert is active (0 = off).
+# Each update is one SMS per contact, so this is the main cost dial.
+SMS_UPDATE_MINUTES=10
+
 # Testing only: point the Twilio client at a local mock instead of the real API.
 # TWILIO_BASE_URL=http://127.0.0.1:9099
 

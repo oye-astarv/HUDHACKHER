@@ -27,6 +27,8 @@ export type ActiveAlert = {
     results: { name: string; ok: boolean; error?: string }[];
     configured?: boolean;
   };
+  /** Minutes between automatic UPDATE texts, when the server is sending them. */
+  updatesMinutes?: number;
   /** What happened when it was sent, kept so a reload can still explain it. */
   note?: string;
 };

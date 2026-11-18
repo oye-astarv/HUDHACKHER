@@ -54,7 +54,13 @@ export default function SosGuidance({
     const { alert } = state;
     const sent = alert.dispatch.results.filter((r) => r.ok).map((r) => r.name);
     if (alert.dispatch.mode === "sms" && sent.length > 0) {
-      return { title: "Alert Active · Live location shared", sub: `Texted ${joinNames(sent)}` };
+      const every = alert.updatesMinutes
+        ? ` · updates every ${alert.updatesMinutes} min`
+        : "";
+      return {
+        title: "Alert Active · Live location shared",
+        sub: `Texted ${joinNames(sent)}${every}`,
+      };
     }
     return {
       title: "Alert Active · Live location streaming",
