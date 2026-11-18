@@ -179,6 +179,64 @@ export default function Page() {
     }
   }, []);
 
+  type SosTarget = { venue: Venue; metres: number; coords: [number, number][] };
+
+  /** Creates the session server-side and asks it to SMS the trusted contacts. */
+  const startAlert = useCallback(
+    async (haven: SosTarget) => {
+      if (!profile) return;
+      setSending(true);
+      setDispatchNote(null);
+      try {
+        const from = { lat: preset.from.lat, lon: preset.from.lon };
+        const created = await triggerEmergency({
+          profile,
+          origin: from,
+          target: {
+            name: haven.venue.name,
+            lat: haven.venue.lat,
+            lon: haven.venue.lon,
+            metres: Math.round(haven.metres),
+          },
+        });
+        saveAlert(created);
+        setAlert(created);
+        await keepAwake();
+
+        const sent = created.dispatch.results.filter((r) => r.ok).length;
+        const failed = created.dispatch.results.length - sent;
+        setDispatchNote(
+          created.dispatch.mode === "sms"
+            ? `Texted ${sent} of ${profile.contacts.length} contact${
+                profile.contacts.length === 1 ? "" : "s"
+              } with your location${failed ? `, ${failed} failed` : ""}.`
+            : "SMS is not configured on the server yet — send it from this phone."
+        );
+        // Never jump to the messaging app on its own: that would take the SOS
+        // screen away at the worst possible moment. Offer it as a button.
+        setShareNeeded(created.dispatch.mode !== "sms" || failed > 0);
+
+        if (navigator.geolocation) {
+          watchRef.current = navigator.geolocation.watchPosition(
+            (pos) => void pushPoint(created, pos.coords.latitude, pos.coords.longitude),
+            () => undefined,
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+          );
+        }
+      } catch (err) {
+        setDispatchNote(`Could not reach the alert service: ${(err as Error).message}`);
+      } finally {
+        setSending(false);
+      }
+    },
+    [profile, preset, keepAwake]
+  );
+
+  /**
+   * SOS is a panic trigger: it finds the nearest staffed haven and sends the
+   * text in the same press. There is deliberately no confirmation step — the
+   * only thing the user should have to do in an emergency is trigger it.
+   */
   const triggerSos = useCallback(() => {
     if (!graph || !bundle) return;
     const from = { lat: preset.from.lat, lon: preset.from.lon };
@@ -188,16 +246,19 @@ export default function Page() {
       return;
     }
     const path = routeTo(graph, from, { lat: haven.venue.lat, lon: haven.venue.lon });
-    setSos({
+    const target: SosTarget = {
       venue: haven.venue,
       metres: haven.metres,
       coords: path?.coords ?? [
         [from.lat, from.lon],
         [haven.venue.lat, haven.venue.lon],
       ],
-    });
+    };
+    setSos(target);
     setSheetOpen(true);
-  }, [graph, bundle, preset, hour]);
+    // Guard against a double tap / repeated hotkey: one alert, one set of texts.
+    if (profile && !alert && !sending) void startAlert(target);
+  }, [graph, bundle, preset, hour, profile, alert, sending, startAlert]);
 
   /**
    * Ping the nearest open safe haven from wherever the walk currently is. Used
@@ -293,54 +354,6 @@ export default function Page() {
     window.history.replaceState({}, "", window.location.pathname);
     triggerSos();
   }, [graph, bundle, triggerSos]);
-
-  /** Creates the session server-side and asks it to SMS the trusted contacts. */
-  const startAlert = useCallback(async () => {
-    if (!sos || !profile) return;
-    setSending(true);
-    setDispatchNote(null);
-    try {
-      const from = { lat: preset.from.lat, lon: preset.from.lon };
-      const created = await triggerEmergency({
-        profile,
-        origin: from,
-        target: {
-          name: sos.venue.name,
-          lat: sos.venue.lat,
-          lon: sos.venue.lon,
-          metres: Math.round(sos.metres),
-        },
-      });
-      saveAlert(created);
-      setAlert(created);
-      await keepAwake();
-
-      const sent = created.dispatch.results.filter((r) => r.ok).length;
-      const failed = created.dispatch.results.length - sent;
-      setDispatchNote(
-        created.dispatch.mode === "sms"
-          ? `Texted ${sent} of ${profile.contacts.length} contact${
-              profile.contacts.length === 1 ? "" : "s"
-            } with your location${failed ? `, ${failed} failed` : ""}.`
-          : "SMS is not configured on the server yet — send it from this phone."
-      );
-      // Never jump to the messaging app on its own: that would take the SOS
-      // screen away at the worst possible moment. Offer it as a button.
-      setShareNeeded(created.dispatch.mode !== "sms" || failed > 0);
-
-      if (navigator.geolocation) {
-        watchRef.current = navigator.geolocation.watchPosition(
-          (pos) => void pushPoint(created, pos.coords.latitude, pos.coords.longitude),
-          () => undefined,
-          { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
-        );
-      }
-    } catch (err) {
-      setDispatchNote(`Could not reach the alert service: ${(err as Error).message}`);
-    } finally {
-      setSending(false);
-    }
-  }, [sos, profile, preset, keepAwake]);
 
   const shareNow = useCallback(() => {
     if (alert) void shareManually(alert, profile?.contacts[0]?.phone);
@@ -560,7 +573,7 @@ export default function Page() {
               pin={pin}
               pinError={pinError}
               onPin={setPin}
-              onStart={startAlert}
+              onStart={() => sos && void startAlert(sos)}
               onResolve={() => setPinPrompt(true)}
               onConfirm={resolveSafe}
               onShare={shareNow}
@@ -829,8 +842,17 @@ function SosPanel({
             disabled={sending || !profile}
             className="w-full rounded-card bg-fast py-3 text-[13px] font-semibold text-white ring-1 ring-white/15 transition active:scale-[0.99] disabled:opacity-60"
           >
-            {sending ? "Sending the alert…" : "Text my contacts & share my location"}
+            {sending
+              ? "Texting your contacts…"
+              : dispatchNote
+                ? "Try sending the alert again"
+                : "Text my contacts & share my location"}
           </button>
+          {dispatchNote && (
+            <p className="rounded-md border border-fast/40 bg-fast/10 px-2 py-1.5 text-[10px] leading-relaxed text-fast">
+              {dispatchNote}
+            </p>
+          )}
           <p className="text-[10px] leading-relaxed text-slate-500">
             {profile
               ? `An SMS with your live location goes to ${profile.contacts
