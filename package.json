@@ -10,7 +10,8 @@
     "deploy": "next build && wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker/tsconfig.json",
     "data:graph": "node scripts/build-data.mjs",
-    "data:news": "node --env-file-if-exists=.env --env-file-if-exists=.dev.vars scripts/fetch-news.mjs"
+    "data:news": "node --env-file-if-exists=.env --env-file-if-exists=.dev.vars scripts/fetch-news.mjs",
+    "dev:https": "next dev -p 3000 --experimental-https"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
