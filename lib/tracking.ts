@@ -139,15 +139,19 @@ export async function fetchSession(id: string) {
   return api<PublicSession & { error?: string }>(`/api/track/${id}`);
 }
 
-/** Manual fallback when WhatsApp isn't configured or a send failed. */
-export async function shareManually(alert: ActiveAlert): Promise<void> {
+/**
+ * Manual fallback when the server has no SMS credentials or a send failed:
+ * opens the phone's own messaging app, prefilled and addressed.
+ */
+export async function shareManually(alert: ActiveAlert, phone?: string): Promise<void> {
   if (typeof navigator !== "undefined" && navigator.share) {
     try {
       await navigator.share({ title: "SafeStride emergency alert", text: alert.message });
       return;
     } catch {
-      // dismissed — fall through to WhatsApp link
+      // dismissed — fall through to the messaging app
     }
   }
-  window.location.href = `https://wa.me/?text=${encodeURIComponent(alert.message)}`;
+  const body = `?&body=${encodeURIComponent(alert.message)}`;
+  window.location.href = phone ? `sms:${phone}${body}` : `sms:${body}`;
 }

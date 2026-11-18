@@ -310,7 +310,7 @@ export default function Page() {
             } with your location${failed ? `, ${failed} failed` : ""}.`
           : "SMS is not configured on the server yet — share the alert below."
       );
-      if (created.dispatch.mode !== "sms") void shareManually(created);
+      if (created.dispatch.mode !== "sms") void shareManually(created, profile.contacts[0]?.phone);
 
       if (navigator.geolocation) {
         watchRef.current = navigator.geolocation.watchPosition(
