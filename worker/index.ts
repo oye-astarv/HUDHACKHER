@@ -23,6 +23,8 @@ export interface Env {
    * signup — enough to demo a real SMS arriving on a phone.
    */
   TEXTBELT_KEY?: string;
+  /** Override the Twilio API host. Only for pointing at a local mock in tests. */
+  TWILIO_BASE_URL?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
   PUBLIC_ORIGIN?: string;
 }
@@ -221,7 +223,8 @@ async function sendViaTextbelt(env: Env, to: string, body: string): Promise<void
 }
 
 async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> {
-  const url = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
+  const base = (env.TWILIO_BASE_URL ?? "https://api.twilio.com").replace(/\/$/, "");
+  const url = `${base}/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
   const form = new URLSearchParams({
     From: env.TWILIO_SMS_FROM!,
     To: to,
@@ -235,9 +238,18 @@ async function sendViaTwilio(env: Env, to: string, body: string): Promise<void> 
     },
     body: form,
   });
+  const out = (await res.json().catch(() => null)) as {
+    sid?: string;
+    status?: string;
+    message?: string;
+    code?: number;
+  } | null;
   if (!res.ok) {
-    const detail = (await res.json().catch(() => null)) as { message?: string; code?: number } | null;
-    throw new Error(detail?.message ? `${detail.code ?? res.status}: ${detail.message}` : `HTTP ${res.status}`);
+    throw new Error(out?.message ? `${out.code ?? res.status}: ${out.message}` : `HTTP ${res.status}`);
+  }
+  // Twilio accepts the message (201) but can still report a terminal failure.
+  if (out?.status === "failed" || out?.status === "undelivered") {
+    throw new Error(`Twilio marked the message ${out.status}`);
   }
 }
 
