@@ -1,8 +1,18 @@
 # Copy to .dev.vars (never commit it) and fill in your own values.
 # Used by `wrangler dev`. For production use `npx wrangler secret put NAME`.
 #
-# Pick ONE sender. If several are set the Worker prefers Twilio, then textbee,
-# then Textmagic, then Textbelt.
+# Pick ONE sender. If several are set the Worker prefers Twilio, then WhatsApp,
+# then textbee, then Textmagic, then Textbelt.
+
+# --- Sender 0: WhatsApp Cloud API (free, no card needed) ---
+# Meta creates a test number the moment you add the WhatsApp product to an app.
+# Free-form alerts only reach contacts who have messaged that number in the
+# last 24h, so ask each contact to send it a "hi" once before you demo.
+# WHATSAPP_TOKEN=your_temporary_or_permanent_token
+# WHATSAPP_PHONE_NUMBER_ID=123456789012345
+# WHATSAPP_API_VERSION=v21.0
+# Testing only: point it at a mock instead of the real Graph API.
+# WHATSAPP_BASE_URL=http://127.0.0.1:9102
 
 # --- Sender 1: Twilio (any volume, sends the map + live tracking links) ---
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

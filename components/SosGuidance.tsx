@@ -59,15 +59,15 @@ export default function SosGuidance({
         : "";
       return {
         title: "Alert Active · Live location shared",
-        sub: `Texted ${joinNames(sent)}${every}`,
+        sub: `Alerted ${joinNames(sent)}${every}`,
       };
     }
     return {
       title: "Alert Active · Live location streaming",
       sub:
         alert.dispatch.mode === "manual"
-          ? "No SMS account on the server — tap Send alert below"
-          : "SMS failed — tap Send alert below",
+          ? "No message sender set up on the server — tap Send alert below"
+          : "Sending failed — tap Send alert below",
     };
   })();
 
@@ -168,7 +168,7 @@ export default function SosGuidance({
             <section className="space-y-2 border border-edge bg-panel p-3">
               {failed.length > 0 && state.alert.dispatch.mode === "sms" && (
                 <p className="text-[11px] text-amber-300">
-                  Couldn&apos;t text {joinNames(failed.map((f) => f.name))}: {failed[0].error}
+                  Couldn&apos;t reach {joinNames(failed.map((f) => f.name))}: {failed[0].error}
                 </p>
               )}
               <button

@@ -65,8 +65,9 @@ export default function ContactsSetup({
         </p>
         <h2 className="mt-1 text-xl font-bold">Who should we alert?</h2>
         <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
-          One tap on SOS sends them a text with your live location and the safe haven you are
-          walking to. No account needed on their side, and this stays on your phone.
+          One tap on SOS sends them your live location and the safe haven you are walking to —
+          by text or WhatsApp, whichever is set up. Nothing to install on their side, and this
+          stays on your phone.
         </p>
       </div>
 

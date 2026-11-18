@@ -41,6 +41,16 @@ export interface Env {
   TEXTMAGIC_FROM?: string;
   /** Override the Textmagic host. Only for pointing at a local mock in tests. */
   TEXTMAGIC_BASE_URL?: string;
+  /**
+   * WhatsApp Cloud API (Meta). Free test number, no card: alerts reach any
+   * contact who has messaged the number in the last 24 hours.
+   */
+  WHATSAPP_TOKEN?: string;
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  /** Graph API version, e.g. v21.0. Defaults to v21.0. */
+  WHATSAPP_API_VERSION?: string;
+  /** Override the Graph host. Only for pointing at a local mock in tests. */
+  WHATSAPP_BASE_URL?: string;
   /** Minutes between automatic position texts while an alert is active. */
   SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
@@ -320,20 +330,62 @@ const twilioReady = (env: Env) =>
   Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_SMS_FROM);
 const textbeeReady = (env: Env) => Boolean(env.TEXTBEE_API_KEY);
 const textmagicReady = (env: Env) => Boolean(env.TEXTMAGIC_USERNAME && env.TEXTMAGIC_API_KEY);
+const whatsappReady = (env: Env) => Boolean(env.WHATSAPP_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID);
 
 /** The public Textbelt key is rate-limited to one text a day. */
 const onFreeTextbelt = (env: Env) =>
   !twilioReady(env) &&
   !textbeeReady(env) &&
   !textmagicReady(env) &&
+  !whatsappReady(env) &&
   env.TEXTBELT_KEY === "textbelt";
 
-/** Twilio, else textbee, else Textmagic, else Textbelt. Set only one. */
+/**
+ * Twilio, else WhatsApp, else textbee, else Textmagic, else Textbelt.
+ * Set only one; the first one with credentials wins.
+ */
 async function sendSms(env: Env, to: string, body: string): Promise<void> {
   if (twilioReady(env)) return sendViaTwilio(env, to, body);
+  if (whatsappReady(env)) return sendViaWhatsapp(env, to, body);
   if (textbeeReady(env)) return sendViaTextbee(env, to, body);
   if (textmagicReady(env)) return sendViaTextmagic(env, to, body);
   return sendViaTextbelt(env, to, body);
+}
+
+/**
+ * WhatsApp Cloud API. Free-form text is allowed while the contact's 24-hour
+ * customer service window is open, i.e. after they have messaged the number.
+ */
+async function sendViaWhatsapp(env: Env, to: string, body: string): Promise<void> {
+  const base = (env.WHATSAPP_BASE_URL ?? "https://graph.facebook.com").replace(/\/$/, "");
+  const version = env.WHATSAPP_API_VERSION ?? "v21.0";
+  const res = await fetch(
+    `${base}/${version}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WHATSAPP_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: to.replace(/^\+/, ""),
+        type: "text",
+        text: { preview_url: true, body },
+      }),
+    }
+  );
+  const out = (await res.json().catch(() => null)) as {
+    error?: { message?: string; code?: number; error_subcode?: number };
+  } | null;
+  if (res.ok) return;
+  const err = out?.error;
+  // 131047: no open 24-hour window, so only an approved template may be sent.
+  if (err?.code === 131047 || err?.error_subcode === 131047) {
+    throw new Error("contact must message this WhatsApp number first");
+  }
+  throw new Error(err?.message ?? `HTTP ${res.status}`);
 }
 
 /** Real UK gateway, no card needed to start. Basic auth: email + API token. */
@@ -524,7 +576,11 @@ async function trigger(req: Request, env: Env): Promise<Response> {
     : message;
 
   const configured =
-    twilioReady(env) || textbeeReady(env) || textmagicReady(env) || Boolean(env.TEXTBELT_KEY);
+    twilioReady(env) ||
+    whatsappReady(env) ||
+    textbeeReady(env) ||
+    textmagicReady(env) ||
+    Boolean(env.TEXTBELT_KEY);
   let results: DispatchResult[] = [];
   if (configured && contacts.length > 0) {
     results = await Promise.all(
@@ -550,13 +606,15 @@ async function trigger(req: Request, env: Env): Promise<Response> {
       mode: configured ? "sms" : "manual",
       provider: twilioReady(env)
         ? "twilio"
-        : textbeeReady(env)
-          ? "textbee"
-          : textmagicReady(env)
-            ? "textmagic"
-            : env.TEXTBELT_KEY
-              ? "textbelt"
-              : null,
+        : whatsappReady(env)
+          ? "whatsapp"
+          : textbeeReady(env)
+            ? "textbee"
+            : textmagicReady(env)
+              ? "textmagic"
+              : env.TEXTBELT_KEY
+                ? "textbelt"
+                : null,
       results,
       configured,
     },
