@@ -32,6 +32,8 @@ export interface Env {
   TEXTBEE_API_KEY?: string;
   /** Override the textbee host. Only for pointing at a local mock in tests. */
   TEXTBEE_BASE_URL?: string;
+  /** Pin a specific textbee device when the account has more than one. */
+  TEXTBEE_DEVICE_ID?: string;
   /** Minutes between automatic position texts while an alert is active. */
   SMS_UPDATE_MINUTES?: string;
   /** Origin used in the tracking link sent to contacts, e.g. https://safestride.example.workers.dev */
@@ -328,7 +330,12 @@ async function sendViaTextbee(env: Env, to: string, body: string): Promise<void>
   const res = await fetch(`${base}/api/v1/gateway/send-sms`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": env.TEXTBEE_API_KEY! },
-    body: JSON.stringify({ message: body, recipients: [to], simSlotIndex: 0 }),
+    body: JSON.stringify({
+      message: body,
+      recipients: [to],
+      simSlotIndex: 0,
+      ...(env.TEXTBEE_DEVICE_ID ? { deviceId: env.TEXTBEE_DEVICE_ID } : {}),
+    }),
   });
   const out = (await res.json().catch(() => null)) as {
     message?: string;
