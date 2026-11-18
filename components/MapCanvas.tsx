@@ -12,6 +12,16 @@ import {
 } from "react-leaflet";
 import type { Incident, RouteResult, Venue } from "@/lib/types";
 
+const C = {
+  casing: "#0A0C0F",
+  safe: "#7FBFA8",
+  fast: "#D4715B",
+  haven: "#9AD6C0",
+  warn: "#C9A227",
+  ink: "#0A0C0F",
+  muted: "#8A93A0",
+};
+
 type Props = {
   centre: [number, number];
   fastest: RouteResult | null;
@@ -45,9 +55,15 @@ function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: Route
         [Math.min(...lats), Math.min(...lons)],
         [Math.max(...lats), Math.max(...lons)],
       ],
-      // animate:false keeps React's double-mount from leaving a zoom
-      // transition to finish on a disposed map, which throws inside Leaflet.
-      { padding: [40, 60], maxZoom: 17, animate: false }
+      // The bottom sheet covers most of the screen, so fit into the strip that
+      // is actually visible, and skip animation to avoid a Leaflet zoom
+      // transition outliving React's double-mount.
+      {
+        paddingTopLeft: [28, 108],
+        paddingBottomRight: [28, Math.round(map.getSize().y * 0.58)],
+        maxZoom: 17,
+        animate: false,
+      }
     );
   }, [fastest, safe, map]);
 
@@ -80,37 +96,43 @@ export default function MapCanvas({
         attribution="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
         maxNativeZoom={16}
         maxZoom={19}
+        className="map-tiles"
       />
 
       <ClickToPick onPick={onPick} />
       <FitRoutes fastest={fastest} safe={safe} />
 
-      {/* fastest: dashed coral */}
+      {/* A dark casing under each line keeps both readable over busy streets. */}
       {fastest && (
-        <Polyline
-          positions={fastest.coords}
-          pathOptions={{
-            color: "#EF4444",
-            weight: 4,
-            opacity: 0.85,
-            dashArray: "8 8",
-            lineCap: "round",
-          }}
-        >
-          <Tooltip sticky>Fastest · {fastest.audit.minutes} min</Tooltip>
-        </Polyline>
+        <>
+          <Polyline
+            positions={fastest.coords}
+            pathOptions={{ color: C.casing, weight: 5, opacity: 0.55 }}
+          />
+          <Polyline
+            positions={fastest.coords}
+            pathOptions={{
+              color: C.fast,
+              weight: 2,
+              opacity: 0.95,
+              dashArray: "1 6",
+              lineCap: "round",
+            }}
+          >
+            <Tooltip sticky>Fastest · {fastest.audit.minutes} min</Tooltip>
+          </Polyline>
+        </>
       )}
 
-      {/* safe: glowing teal underlay + solid line */}
       {safe && (
         <>
           <Polyline
             positions={safe.coords}
-            pathOptions={{ color: "#14B8A6", weight: 12, opacity: 0.18 }}
+            pathOptions={{ color: C.casing, weight: 7, opacity: 0.6 }}
           />
           <Polyline
             positions={safe.coords}
-            pathOptions={{ color: "#14B8A6", weight: 5, opacity: 1, lineCap: "round" }}
+            pathOptions={{ color: C.safe, weight: 3, opacity: 1, lineCap: "round" }}
           >
             <Tooltip sticky>Eyes on the street · {safe.audit.minutes} min</Tooltip>
           </Polyline>
@@ -119,31 +141,51 @@ export default function MapCanvas({
 
       {/* emergency route to the nearest safe haven */}
       {sos && (
-        <Polyline
-          positions={sos.coords}
-          pathOptions={{ color: "#22C55E", weight: 6, opacity: 0.95 }}
-        />
+        <>
+          <Polyline
+            positions={sos.coords}
+            pathOptions={{ color: C.casing, weight: 6, opacity: 0.6 }}
+          />
+          <Polyline
+            positions={sos.coords}
+            pathOptions={{
+              color: C.haven,
+              weight: 2.5,
+              opacity: 1,
+              dashArray: "6 5",
+              lineCap: "round",
+            }}
+          />
+        </>
       )}
 
       {walk && (
-        <CircleMarker
-          center={walk}
-          radius={9}
-          pathOptions={{ color: "#FFFFFF", fillColor: "#14B8A6", fillOpacity: 1, weight: 3 }}
-        />
+        <>
+          <CircleMarker
+            center={walk}
+            radius={12}
+            pathOptions={{ color: C.safe, fillColor: C.safe, fillOpacity: 0.14, weight: 0 }}
+          />
+          <CircleMarker
+            center={walk}
+            radius={5}
+            pathOptions={{ color: C.ink, fillColor: "#E6E9EE", fillOpacity: 1, weight: 2 }}
+          />
+        </>
       )}
 
+      {/* Hollow rings instead of filled dots: 100+ venues stay readable */}
       {venues.map((v, i) => (
         <CircleMarker
           key={`${v.name}-${i}`}
           center={[v.lat, v.lon]}
-          radius={v.tier === 1 ? 7 : 5}
+          radius={v.tier === 1 ? 5 : 3.5}
           pathOptions={{
-            color: v.tier === 1 ? "#22C55E" : "#0EA5E9",
-            fillColor: v.tier === 1 ? "#22C55E" : "#0EA5E9",
-            fillOpacity: 0.75,
-            weight: 2,
-            opacity: 0.9,
+            color: v.tier === 1 ? C.haven : C.muted,
+            fillColor: C.ink,
+            fillOpacity: 0.7,
+            weight: 1.4,
+            opacity: v.tier === 1 ? 0.95 : 0.7,
           }}
         >
           <Tooltip>
@@ -160,8 +202,8 @@ export default function MapCanvas({
       {sos && (
         <CircleMarker
           center={[sos.venue.lat, sos.venue.lon]}
-          radius={13}
-          pathOptions={{ color: "#22C55E", weight: 3, fillOpacity: 0.25, fillColor: "#22C55E" }}
+          radius={11}
+          pathOptions={{ color: C.haven, weight: 1.5, fillOpacity: 0.12, fillColor: C.haven }}
         >
           <Tooltip permanent direction="top">
             {sos.venue.name}
@@ -173,13 +215,12 @@ export default function MapCanvas({
         <CircleMarker
           key={`inc-${i}`}
           center={[inc.lat, inc.lon]}
-          radius={8}
+          radius={4.5}
           pathOptions={{
-            color: "#F59E0B",
-            fillColor: "#F59E0B",
-            fillOpacity: 0.5,
-            weight: 2,
-            dashArray: "3 3",
+            color: C.warn,
+            fillColor: C.warn,
+            fillOpacity: 0.7,
+            weight: 1.5,
           }}
         >
           <Tooltip>

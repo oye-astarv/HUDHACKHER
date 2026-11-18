@@ -360,24 +360,24 @@ export default function Page() {
       </div>
 
       {/* top controls */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-[500] bg-gradient-to-b from-ink via-ink/90 to-transparent pb-6 pt-[max(env(safe-area-inset-top),10px)]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-[500] border-b border-white/[0.05] bg-ink/90 pb-3 pt-[max(env(safe-area-inset-top),8px)] backdrop-blur-md">
         <div className="pointer-events-auto mx-auto max-w-md space-y-3 px-3">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-base font-semibold tracking-tight">
+              <h1 className="text-[15px] font-semibold leading-none tracking-[-0.01em] text-slate-50">
                 Safe<span className="text-safe">Stride</span>
               </h1>
-              <p className="text-[11px] text-slate-400">
+              <p className="mt-1 text-[10.5px] tracking-wide text-slate-500">
                 {light.label} · {light.isDark ? "after dark" : "daylight"} ·
                 sunset {fmtTime(light.sunset)}
               </p>
             </div>
-            <span className="rounded-full border border-edge bg-panel/80 px-2 py-1 text-[10px] text-slate-400">
+            <span className="rounded-md border border-edge/70 px-2 py-1 text-[10px] tabular-nums tracking-wide text-slate-500">
               {bundle.graph.counts.edges.toLocaleString()} streets
             </span>
           </div>
 
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <div className="flex gap-0.5 rounded-lg border border-edge/70 bg-panel/60 p-0.5">
             {PRESETS.map((p) => (
               <button
                 key={p.id}
@@ -387,10 +387,10 @@ export default function Page() {
                   setWalkMetres(0);
                   firedRef.current.clear();
                 }}
-                className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] transition ${
+                className={`flex-1 rounded-[6px] px-2 py-1.5 text-[10.5px] font-medium transition ${
                   p.id === presetId
-                    ? "border-safe/60 bg-safe/15 text-safe"
-                    : "border-edge bg-panel/70 text-slate-400"
+                    ? "bg-white/[0.07] text-slate-100"
+                    : "text-slate-500 hover:text-slate-300"
                 }`}
               >
                 {p.label}
@@ -415,7 +415,7 @@ export default function Page() {
             />
             <span className="text-slate-500">01:00</span>
           </div>
-          <p className="text-[10px] leading-tight text-slate-500">
+          <p className="text-[10px] leading-relaxed text-slate-500">
             Engine routes from <b className="text-slate-300">{preset.from.name}</b> to{" "}
             <b className="text-slate-300">{destination.name}</b> · tap the map to
             move the destination
@@ -425,7 +425,7 @@ export default function Page() {
 
       {toast && (
         <div className="absolute inset-x-0 top-[46%] z-[900] px-4">
-          <div className="mx-auto max-w-sm rounded-xl border border-safe/40 bg-safe/15 px-3 py-2 text-[11px] text-safe backdrop-blur">
+          <div className="mx-auto max-w-sm rounded-lg border border-edge/80 bg-panel/95 px-3 py-2 text-[11px] leading-relaxed text-slate-200 shadow-lg backdrop-blur">
             {toast}
           </div>
         </div>
@@ -434,7 +434,7 @@ export default function Page() {
       {/* SOS */}
       <button
         onClick={triggerSos}
-        className="absolute bottom-[calc(var(--app-h)*0.52)] right-4 z-[800] h-16 w-16 rounded-full border-2 border-red-300/40 bg-fast text-[11px] font-bold uppercase tracking-wider text-white shadow-[0_0_30px_rgba(239,68,68,0.55)]"
+        className="absolute right-4 z-[800] h-14 w-14 rounded-full bg-fast text-[10px] font-semibold uppercase tracking-label text-white ring-1 ring-white/20 transition active:scale-95"
         style={{ bottom: "calc(52% + 8px)" }}
       >
         SOS
@@ -442,7 +442,7 @@ export default function Page() {
 
       {/* bottom sheet */}
       <section
-        className="absolute inset-x-0 bottom-0 z-[700] rounded-t-2xl border-t border-edge bg-panel/95 backdrop-blur-xl transition-transform"
+        className="absolute inset-x-0 bottom-0 z-[700] rounded-t-xl border-t border-edge/80 bg-ink/95 backdrop-blur-xl transition-transform"
         style={{
           transform: sheetOpen ? "translateY(0)" : "translateY(58%)",
           maxHeight: "58vh",
@@ -453,7 +453,7 @@ export default function Page() {
           className="mx-auto block w-full py-2"
           aria-label={sheetOpen ? "Collapse panel" : "Expand panel"}
         >
-          <span className="mx-auto block h-1 w-10 rounded-full bg-edge" />
+                            <span className="mx-auto block h-1 w-9 rounded-full bg-edge" />
         </button>
 
         <div className="max-h-[50vh] overflow-y-auto px-3 pb-[max(env(safe-area-inset-bottom),12px)]">
@@ -544,26 +544,30 @@ function AuditCard({
   const colour = tone === "safe" ? "text-safe" : "text-fast";
   const border = active
     ? tone === "safe"
-      ? "border-safe/70"
-      : "border-fast/70"
-    : "border-edge";
+      ? "border-safe/50"
+      : "border-fast/50"
+    : "border-edge/70";
 
   return (
     <button
       onClick={onSelect}
-      className={`rounded-xl border ${border} bg-ink/60 p-2.5 text-left transition`}
+      className={`rounded-card border ${border} bg-panel/50 p-3 text-left transition-colors hover:bg-panel-strong/60`}
     >
-      <div className="flex items-baseline justify-between">
-        <span className={`text-[11px] font-medium ${colour}`}>{title}</span>
-        <span className="text-[10px] text-slate-500">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className={`text-[9.5px] font-semibold uppercase tracking-label ${colour}`}>
+          {title}
+        </span>
+        <span className="shrink-0 text-[10px] tabular-nums text-slate-600">
           {delta === 0 ? "same" : delta > 0 ? `+${delta} min` : `${delta} min`}
         </span>
       </div>
-      <div className="mt-0.5 text-xl font-semibold tabular-nums">
+      <div className="mt-1.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums text-slate-50">
         {route.audit.minutes}
-        <span className="ml-1 text-[11px] font-normal text-slate-500">min</span>
+        <span className="ml-1 text-[10px] font-normal uppercase tracking-label text-slate-600">
+          min
+        </span>
       </div>
-      <dl className="mt-1.5 space-y-0.5 text-[10px] text-slate-400">
+      <dl className="mt-2.5 space-y-1 border-t border-white/[0.06] pt-2 text-[10.5px] text-slate-500">
         <Row label="lit / main road" value={`${Math.round((route.audit.litShare + route.audit.inferredShare) * 100)}%`} />
         <Row label="open venues" value={String(route.audit.openVenues)} />
         <Row label="through parks" value={`${route.audit.parkMetres} m`} />
@@ -589,7 +593,7 @@ function Row({
   return (
     <div className="flex justify-between">
       <dt>{label}</dt>
-      <dd className={`tabular-nums ${warn ? "text-warn" : "text-slate-200"}`}>
+      <dd className={`tabular-nums ${warn ? "text-warn" : "text-slate-300"}`}>
         {value}
       </dd>
     </div>
@@ -609,10 +613,10 @@ function WalkScrubber({
 }) {
   const progress = length > 0 ? metres / length : 0;
   return (
-    <div className="mt-3 rounded-xl border border-edge bg-ink/60 p-2.5">
-      <div className="flex justify-between text-[10px] text-slate-400">
-        <span>Simulate walk</span>
-        <span className="tabular-nums">
+    <div className="mt-3 rounded-card border border-edge/80 bg-panel/50 p-3">
+      <div className="flex justify-between text-[10px] text-slate-500">
+        <span className="uppercase tracking-label">Simulate walk</span>
+        <span className="tabular-nums text-slate-400">
           {Math.round(progress * 100)}% · {Math.max(0, Math.round(minutes * (1 - progress)))} min left
         </span>
       </div>
@@ -692,16 +696,18 @@ function SosPanel({
     <div className="space-y-3 py-1">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <p className="text-[11px] uppercase tracking-wider text-haven">
+          <p className="text-[9.5px] font-semibold uppercase tracking-label text-haven">
             Nearest open safe haven
           </p>
-          <h2 className="text-base font-semibold leading-tight">{sos.venue.name}</h2>
-          <p className="text-[11px] text-slate-400">
+          <h2 className="mt-1 text-[17px] font-semibold leading-tight tracking-tight text-slate-50">
+            {sos.venue.name}
+          </h2>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
             {sos.venue.tier === 1 ? "Staffed refuge (Ask for Angela)" : "Late-night staffed"} ·{" "}
             {Math.round(sos.metres)} m · {minutes} min walk · {sos.venue.hours}
           </p>
         </div>
-        <span className="rounded-full bg-haven/20 px-2 py-1 text-[10px] text-haven">
+        <span className="shrink-0 whitespace-nowrap rounded-md border border-haven/30 px-2 py-1 text-[9px] font-medium uppercase tracking-label text-haven">
           open now
         </span>
       </div>
@@ -709,22 +715,22 @@ function SosPanel({
       {!session ? (
         <button
           onClick={onStart}
-          className="w-full rounded-lg bg-fast py-3 text-sm font-semibold text-white"
+          className="w-full rounded-card bg-fast py-3 text-[13px] font-semibold text-white ring-1 ring-white/15 transition active:scale-[0.99]"
         >
           Alert my contacts &amp; share live location
         </button>
       ) : (
         <div className="space-y-2">
-          <p className="rounded-lg border border-safe/40 bg-safe/10 px-2 py-1.5 text-[10px] text-safe">
+          <p className="rounded-md border border-safe/25 bg-safe/[0.07] px-2 py-1.5 text-[10px] leading-relaxed text-safe">
             Live link active{session.status === "safe" ? " — you are marked safe" : ""}. Share it
             with a trusted contact:
           </p>
-          <code className="block truncate rounded-lg border border-edge bg-ink px-2 py-1.5 text-[10px] text-slate-300">
+          <code className="block truncate rounded-md border border-edge/80 bg-ink px-2 py-1.5 text-[10px] text-slate-400">
             /track/{session.token}
           </code>
           <button
             onClick={onResolve}
-            className="w-full rounded-lg border border-edge py-2.5 text-sm font-semibold text-slate-200"
+            className="w-full rounded-card border border-edge/80 py-2.5 text-[13px] font-semibold text-slate-200 transition hover:bg-white/[0.03]"
           >
             I&apos;m safe — end alert
           </button>

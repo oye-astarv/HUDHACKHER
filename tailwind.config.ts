@@ -5,13 +5,16 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#070B12",
-        panel: "#0D131D",
-        edge: "#1B2634",
-        safe: "#14B8A6",
-        fast: "#EF4444",
-        warn: "#F59E0B",
-        haven: "#22C55E",
+        ink: "#0A0C0F",
+        panel: "#111419",
+        "panel-strong": "#15181E",
+        edge: "#232830",
+        // Muted enough to read as cartography rather than neon signage.
+        safe: "#7FBFA8",
+        fast: "#D4715B",
+        warn: "#C9A227",
+        haven: "#9AD6C0",
+        muted: "#8A93A0",
       },
       fontFamily: {
         sans: [
@@ -22,6 +25,12 @@ const config: Config = {
           "Roboto",
           "sans-serif",
         ],
+      },
+      letterSpacing: {
+        label: "0.09em",
+      },
+      borderRadius: {
+        card: "10px",
       },
     },
   },
