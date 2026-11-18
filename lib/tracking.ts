@@ -27,6 +27,8 @@ export type ActiveAlert = {
     results: { name: string; ok: boolean; error?: string }[];
     configured?: boolean;
   };
+  /** What happened when it was sent, kept so a reload can still explain it. */
+  note?: string;
 };
 
 export type TrackPoint = { lat: number; lon: number; ts: number };

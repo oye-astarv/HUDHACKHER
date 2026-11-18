@@ -77,6 +77,8 @@ export default function Page() {
     const savedAlert = loadAlert();
     if (savedAlert) {
       setAlert(savedAlert);
+      setDispatchNote(savedAlert.note ?? null);
+      setShareNeeded(savedAlert.dispatch.mode !== "sms");
       void fetchSession(savedAlert.id).then(({ status, body }) => {
         if (status !== 200 || body.status !== "active") {
           saveAlert(null);
@@ -199,22 +201,24 @@ export default function Page() {
             metres: Math.round(haven.metres),
           },
         });
-        saveAlert(created);
-        setAlert(created);
-        await keepAwake();
-
         const sent = created.dispatch.results.filter((r) => r.ok).length;
         const failed = created.dispatch.results.length - sent;
-        setDispatchNote(
+        const note =
           created.dispatch.mode === "sms"
             ? `Texted ${sent} of ${profile.contacts.length} contact${
                 profile.contacts.length === 1 ? "" : "s"
               } with your location${failed ? `, ${failed} failed` : ""}.`
-            : "SMS is not configured on the server yet — send it from this phone."
-        );
+            : "SMS is not configured on the server yet — send it from this phone.";
+        // Store the outcome with the alert, so a reload can still explain
+        // what happened instead of falling back to a bare "Alert sent."
+        const stored = { ...created, note };
+        saveAlert(stored);
+        setAlert(stored);
+        setDispatchNote(note);
         // Never jump to the messaging app on its own: that would take the SOS
         // screen away at the worst possible moment. Offer it as a button.
         setShareNeeded(created.dispatch.mode !== "sms" || failed > 0);
+        await keepAwake();
 
         if (navigator.geolocation) {
           watchRef.current = navigator.geolocation.watchPosition(
@@ -256,8 +260,18 @@ export default function Page() {
     };
     setSos(target);
     setSheetOpen(true);
-    // Guard against a double tap / repeated hotkey: one alert, one set of texts.
-    if (profile && !alert && !sending) void startAlert(target);
+
+    // One alert at a time, but never a silent no-op: a second SOS explains
+    // itself instead of looking broken.
+    if (alert) {
+      const at = new Date(alert.startedAt).toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      setToast(`Alert already active since ${at}. Mark yourself safe to start a new one.`);
+      return;
+    }
+    if (profile && !sending) void startAlert(target);
   }, [graph, bundle, preset, hour, profile, alert, sending, startAlert]);
 
   /**
