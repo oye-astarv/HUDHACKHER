@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import {
   CircleMarker,
   MapContainer,
@@ -35,11 +35,7 @@ function ClickToPick({ onPick }: { onPick: (lat: number, lon: number) => void })
 function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: RouteResult | null }) {
   const map = useMap();
 
-  const fit = useCallback(() => {
-    // The map div is sized by CSS after Leaflet mounts, so Leaflet keeps a
-    // stale size and paints tiles/routes far outside the visible box until it
-    // is told to measure again.
-    map.invalidateSize();
+  useEffect(() => {
     const coords = [...(fastest?.coords ?? []), ...(safe?.coords ?? [])];
     if (coords.length < 2) return;
     const lats = coords.map((c) => c[0]);
@@ -49,16 +45,11 @@ function FitRoutes({ fastest, safe }: { fastest: RouteResult | null; safe: Route
         [Math.min(...lats), Math.min(...lons)],
         [Math.max(...lats), Math.max(...lons)],
       ],
-      { padding: [40, 60], maxZoom: 17 }
+      // animate:false keeps React's double-mount from leaving a zoom
+      // transition to finish on a disposed map, which throws inside Leaflet.
+      { padding: [40, 60], maxZoom: 17, animate: false }
     );
   }, [fastest, safe, map]);
-
-  useEffect(() => {
-    fit();
-    const observer = new ResizeObserver(fit);
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
-  }, [fit, map]);
 
   return null;
 }

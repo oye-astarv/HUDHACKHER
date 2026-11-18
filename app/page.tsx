@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { dayLight, fmtTime, loadData, type DataBundle } from "@/lib/data";
+import { watchLowBattery } from "@/lib/battery";
 import { distanceM, pointAlong, polylineLength } from "@/lib/geo";
 import { prepare } from "@/lib/graph";
 import { DEMO_CENTRE, PRESETS } from "@/lib/presets";
@@ -120,6 +121,22 @@ export default function Page() {
     }
   }, [walkPoint, openVenues, walkLength, walkMetres, ok]);
 
+  // Warn when the walk passes a reported incident.
+  useEffect(() => {
+    if (!walkPoint || !bundle) return;
+    for (const incident of bundle.incidents) {
+      const key = `incident:${incident.lat.toFixed(4)},${incident.lon.toFixed(4)}`;
+      if (firedRef.current.has(key)) continue;
+      // Incidents are geocoded to a street or neighbourhood, not a doorstep,
+      // so the radius is generous enough to cover that imprecision.
+      if (distanceM(walkPoint[0], walkPoint[1], incident.lat, incident.lon) > 200) continue;
+      firedRef.current.add(key);
+      setToast(
+        `Suspicious activity nearby — ${incident.category.toLowerCase()} reported near ${incident.street}. Stay on the lit main roads.`
+      );
+    }
+  }, [walkPoint, bundle]);
+
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(null), 4200);
@@ -153,6 +170,94 @@ export default function Page() {
     });
     setSheetOpen(true);
   }, [graph, bundle, preset, hour]);
+
+  /**
+   * Ping the nearest open safe haven from wherever the walk currently is. Used
+   * by the 10% battery watchdog and by an explicit ping; keeps a running
+   * session's last fix fresh so followers see it immediately.
+   */
+  const pingSafeHaven = useCallback(
+    (reason: string) => {
+      if (!graph || !bundle) return;
+      const from = walkPoint
+        ? { lat: walkPoint[0], lon: walkPoint[1] }
+        : { lat: preset.from.lat, lon: preset.from.lon };
+      const haven = nearestHaven(bundle.venues, from, ((hour % 24) + 24) % 24);
+      if (!haven) {
+        setToast(`${reason} — no open safe haven found nearby right now.`);
+        return;
+      }
+      if (session?.status === "active") {
+        pushPoint(session.token, { lat: from.lat, lon: from.lon, ts: Date.now() });
+      }
+      const minutes = Math.max(1, Math.round(haven.metres / 1.33 / 60));
+      setToast(
+        `${reason} — nearest open safe haven: ${haven.venue.name}, ${Math.round(
+          haven.metres
+        )} m (${minutes} min).`
+      );
+    },
+    [graph, bundle, walkPoint, preset, hour, session]
+  );
+
+  // 10% battery → ping a safe haven without the user touching anything.
+  useEffect(() => {
+    if (!graph || !bundle) return;
+    const onLow = () => pingSafeHaven("Battery at 10%");
+    const stopWatching = watchLowBattery(onLow);
+    window.addEventListener("safestride:low-battery", onLow);
+    return () => {
+      stopWatching();
+      window.removeEventListener("safestride:low-battery", onLow);
+    };
+  }, [graph, bundle, pingSafeHaven]);
+
+  // Hidden panic trigger: three quick presses of a panic key, or ⌘/Ctrl+Shift+S.
+  // Browsers never deliver the power or volume rocker to a web page, but a
+  // WebView wrapper (and iOS Action Button → Shortcuts → /?sos=1) can.
+  useEffect(() => {
+    const PANIC_KEYS = new Set([
+      " ",
+      "Spacebar",
+      "AudioVolumeUp",
+      "AudioVolumeDown",
+      "MediaPlayPause",
+    ]);
+    let stamps: number[] = [];
+
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        triggerSos();
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable;
+      if (typing || !PANIC_KEYS.has(event.key)) return;
+
+      const now = Date.now();
+      stamps = [...stamps.filter((t) => now - t < 1200), now];
+      if (stamps.length < 3) return;
+      stamps = [];
+      event.preventDefault();
+      triggerSos();
+    };
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [triggerSos]);
+
+  // Deep link for hardware buttons / shortcuts: /?sos=1 fires the alert on load.
+  useEffect(() => {
+    if (!graph || !bundle) return;
+    if (new URLSearchParams(window.location.search).get("sos") !== "1") return;
+    window.history.replaceState({}, "", window.location.pathname);
+    triggerSos();
+  }, [graph, bundle, triggerSos]);
 
   const startAlert = useCallback(async () => {
     if (!sos) return;
@@ -520,6 +625,11 @@ function WalkScrubber({
         className="mt-2 h-4 w-full"
         aria-label="Walk progress"
       />
+      <p className="mt-1.5 text-[10px] leading-tight text-slate-500">
+        Panic trigger: triple-press <kbd className="text-slate-400">space</kbd> or{" "}
+        <kbd className="text-slate-400">⌘/Ctrl</kbd>+<kbd className="text-slate-400">⇧</kbd>+<kbd className="text-slate-400">S</kbd> — no
+        button to press.
+      </p>
     </div>
   );
 }

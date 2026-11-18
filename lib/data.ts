@@ -7,7 +7,9 @@ const CACHE = new Map<string, unknown>();
 
 async function loadJson<T>(path: string): Promise<T> {
   if (CACHE.has(path)) return CACHE.get(path) as T;
-  const res = await fetch(path, { cache: "force-cache" });
+  // Revalidate rather than trust a cached copy: incidents.json changes every
+  // time the news pipeline runs, and a stale copy silently hides new pins.
+  const res = await fetch(path, { cache: "no-cache" });
   if (!res.ok) throw new Error(`Failed to load ${path} (${res.status})`);
   const data = (await res.json()) as T;
   CACHE.set(path, data);
